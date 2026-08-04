@@ -3,6 +3,7 @@
 #include "util/output.hpp"
 #include "util/paths.hpp"
 #include "util/progress.hpp"
+#include "util/version.hpp"
 
 #include <cstdlib>
 #include <fstream>
@@ -67,6 +68,21 @@ static bool addToUserPath(const fs::path& dir) {
   return writeUserPath(current);
 }
 
+bool installBinaryToPath(const fs::path& src, bool updatePath) {
+  const auto destDir = installDir();
+  ensureDir(destDir);
+  const auto dest = destDir / "pp.exe";
+  std::error_code ec;
+  fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+  if (ec) return false;
+  if (updatePath) return addInstallDirToPath();
+  return true;
+}
+
+bool addInstallDirToPath() {
+  return addToUserPath(installDir());
+}
+
 static bool removeFromUserPath(const fs::path& dir) {
   std::string current;
   if (!readUserPath(current)) return true;
@@ -105,6 +121,22 @@ function Sync-PpProject {
     return $null
 }
 
+function Invoke-PpEnvApply {
+    $block = & pp.exe env apply --shell 2>$null
+    if ($LASTEXITCODE -eq 0 -and $block) { Invoke-Expression $block }
+}
+
+function Invoke-PpEnvShell {
+    param([string[]]$EnvArgs)
+    $shellArgs = @('env') + $EnvArgs + @('--shell')
+    $block = & pp.exe @shellArgs 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & pp.exe env @EnvArgs
+        return
+    }
+    if ($block) { Invoke-Expression $block }
+}
+
 function Invoke-PpCd {
     param([string]$Name, [switch]$Quiet)
     $path = & pp.exe cd $Name --quiet 2>$null
@@ -112,10 +144,12 @@ function Invoke-PpCd {
         & pp.exe cd $Name
         return $false
     }
+    & pp.exe env clear --shell 2>$null | ForEach-Object { Invoke-Expression $_ }
     Set-Location $path
     $env:PP_PROJECT = $Name
     $env:PP_PROJECT_PATH = $path
     if (-not $Quiet) { Write-Host "-> $path" -ForegroundColor Cyan }
+    Invoke-PpEnvApply
     return $true
 }
 
@@ -126,6 +160,10 @@ function pp {
         if ($verb -in @('cd', 'goto', 'go', 'enter')) {
             $quiet = $Args -contains '--quiet' -or $Args -contains '-q'
             [void](Invoke-PpCd -Name $Args[1] -Quiet:$quiet)
+            return
+        }
+        if ($verb -eq 'env' -and $Args[1] -in @('apply', 'clear', 'load')) {
+            Invoke-PpEnvShell -EnvArgs $Args[1..($Args.Length - 1)]
             return
         }
     }
@@ -158,25 +196,13 @@ bool installSelf() {
     return false;
   }
 
-  const auto destDir = installDir();
-  ensureDir(destDir);
-  const auto dest = destDir / "pp.exe";
-
-  progress.step("copying to " + dest.string());
-  std::error_code ec;
-  fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
-  if (ec) {
-    out::error("failed to copy executable");
+  progress.step("copying to " + (installDir() / "pp.exe").string());
+  if (!installBinaryToPath(src, true)) {
+    out::error("failed to install");
     return false;
   }
 
-  progress.step("updating user PATH");
-  if (!addToUserPath(destDir)) {
-    out::error("failed to update PATH");
-    return false;
-  }
-
-  progress.done("ProjectPlatform installed to " + destDir.string());
+  progress.done(std::string("ProjectPlatform ") + PP_APP_VERSION + " installed to " + installDir().string());
   out::blank();
   out::info("Restart your terminal, then run:  pp list");
   out::dim("Optional — enable in-terminal project jumping:");

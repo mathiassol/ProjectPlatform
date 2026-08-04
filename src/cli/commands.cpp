@@ -1,6 +1,9 @@
 #include "cli/commands.hpp"
+#include "cli/env_commands.hpp"
 
 #include "core/install.hpp"
+#include "core/update.hpp"
+#include "util/version.hpp"
 #include "core/projects.hpp"
 #include "core/scripts.hpp"
 #include "core/templates.hpp"
@@ -42,9 +45,14 @@ static void printHelp() {
   out::dim("  pp script new <name> [--global|-g] [--type ps1|bat]");
   out::dim("  pp script delete <name> [--global|-g] [--force]");
   out::blank();
+  out::info("Environment & secrets");
+  out::dim("  pp env set/get/list/load/apply/clear   Manage env vars & .env files");
+  out::dim("  pp env help                            Full env command reference");
+  out::blank();
   out::info("Shell & setup");
-  out::dim("  pp install                 Install pp.exe to user PATH");
-  out::dim("  pp uninstall               Remove from PATH");
+  out::dim("  pp update [--check] [--force]   Check/install latest GitHub release");
+  out::dim("  pp version                      Show version");
+  out::dim("  pp install / uninstall          PATH setup");
   out::dim("  pp hook install            Enable pp cd/goto in terminal (+ project prompt)");
   out::dim("  pp hook uninstall");
   out::dim("  pp hook status             Show whether shell integration is active");
@@ -359,8 +367,12 @@ int runCommand(const Args& args) {
     return 0;
   }
   if (cmd == "version" || cmd == "-v") {
-    std::cout << "ProjectPlatform 1.0.0\n";
+    std::cout << "ProjectPlatform " << PP_APP_VERSION << "\n";
     return 0;
+  }
+  if (cmd == "update" || cmd == "upgrade") {
+    if (args.check_only) return checkUpdate(false) ? 0 : 1;
+    return performUpdate(args.force) ? 0 : 1;
   }
   if (cmd == "install") return installSelf() ? 0 : 1;
   if (cmd == "uninstall") return uninstallSelf() ? 0 : 1;
@@ -429,6 +441,7 @@ int runCommand(const Args& args) {
   }
   if (cmd == "template" || cmd == "tpl") return cmdTemplate(args);
   if (cmd == "script" || cmd == "scripts") return cmdScript(args);
+  if (cmd == "env" || cmd == "secrets") return runEnvCommand(args);
 
   out::error("unknown command: " + cmd);
   out::dim("run 'pp help' for usage");

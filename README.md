@@ -4,7 +4,7 @@ Windows project manager CLI for `Documents/Projects`.
 
 ## Quick install
 
-1. Download **ProjectPlatform-v1.0.0-win64.zip** from [Releases](https://github.com/mathiassol/ProjectPlatform/releases)
+1. Download **ProjectPlatform-v1.1.0-win64.zip** from [Releases](https://github.com/mathiassol/ProjectPlatform/releases)
 2. Extract the zip
 3. **Double-click `Install.bat`**
 4. Open a **new** terminal and run `pp list`
@@ -30,8 +30,14 @@ cpm build
 
 Run `pp help` for the full list.
 
+```powershell
+pp update          # check GitHub and install latest release
+pp update --check  # check only, don't install
+```
+
 | Command | Description |
 |---------|-------------|
+| `pp update` | Install latest release from GitHub |
 | `pp list` | List projects |
 | `pp cd <name>` | Jump to project (needs `pp hook install`) |
 | `pp template add/create` | Manage templates in `Documents/Templates` |

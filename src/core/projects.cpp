@@ -148,6 +148,7 @@ bool createProject(const std::string& name) {
   }
   fs::create_directories(dest);
   fs::create_directories(projectScriptsDir(dest));
+  fs::create_directories(dest / ".pp");
   std::ofstream marker(dest / ".pp-project");
   marker << "managed-by=ProjectPlatform\n";
   out::success("created project: " + name);

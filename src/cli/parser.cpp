@@ -12,6 +12,13 @@ Args parseArgs(int argc, char** argv) {
     else if (arg == "--json") a.json = true;
     else if (arg == "--global" || arg == "-g") a.global = true;
     else if (arg == "--project" || arg == "-p") a.project_scope = true;
+    else if (arg == "--secret") a.secret = true;
+    else if (arg == "--show-secrets") a.show_secrets = true;
+    else if (arg == "--remember") a.remember = true;
+    else if (arg == "--import") a.import_vars = true;
+    else if (arg == "--shell" || arg == "ps") a.shell_output = true;
+    else if (arg == "--all") a.all = true;
+    else if (arg == "--check") a.check_only = true;
     else if (arg == "--type" && i + 1 < argc) a.type = argv[++i];
     else if (arg.rfind("--", 0) == 0) {
       /* ignore unknown flags for forward compat */
