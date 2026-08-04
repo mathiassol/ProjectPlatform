@@ -1,0 +1,31 @@
+{
+  "name": "pp",
+  "version": "1.0.0",
+  "description": "ProjectPlatform - Windows project management CLI (PP)",
+  "type": "executable",
+  "main": "src/main.cpp",
+  "sources": [
+    "src/main.cpp",
+    "src/cli/commands.cpp",
+    "src/cli/parser.cpp",
+    "src/core/gitignore.cpp",
+    "src/core/install.cpp",
+    "src/core/projects.cpp",
+    "src/core/scripts.cpp",
+    "src/core/templates.cpp",
+    "src/util/output.cpp",
+    "src/util/paths.cpp",
+    "src/util/progress.cpp"
+  ],
+  "cmake": false,
+  "scripts": {
+    "build": "cpm build",
+    "start": "cpm run",
+    "install-local": "cpm build && cpm run -- install",
+    "clean": "cpm clean"
+  },
+  "dependencies": {},
+  "include": ["src"],
+  "author": "",
+  "license": "MIT"
+}
