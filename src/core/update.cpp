@@ -207,16 +207,19 @@ bool performUpdate(bool force) {
   }
 
   progress.step("installing to " + installDir().string());
-  if (!installBinaryToPath(newExe, true)) {
-    out::error("install failed");
+  std::string installError;
+  if (!replaceInstalledBinary(newExe, installError)) {
+    out::error("install failed: " + installError);
     cleanupDir(tempRoot);
     return false;
   }
-
+  addInstallDirToPath();
   refreshHookScript();
   cleanupDir(tempRoot);
   progress.done("updated to " + release->version);
-  out::dim("Restart your terminal, then run: pp version");
+  out::info("Update applied. Restart your terminal, then run: pp version");
+  if (fs::exists(installDir() / "pp.new.exe"))
+    out::dim("Finishing replace after this command exits...");
   return true;
 }
 

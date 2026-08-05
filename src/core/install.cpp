@@ -7,6 +7,7 @@
 
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <windows.h>
 
 namespace pp {
@@ -81,6 +82,91 @@ bool installBinaryToPath(const fs::path& src, bool updatePath) {
 
 bool addInstallDirToPath() {
   return addToUserPath(installDir());
+}
+
+static bool launchDetachedCommand(std::string cmd) {
+  STARTUPINFOA si{};
+  si.cb = sizeof(si);
+  si.dwFlags = STARTF_USESHOWWINDOW;
+  si.wShowWindow = SW_HIDE;
+  PROCESS_INFORMATION pi{};
+  if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS,
+                      nullptr, nullptr, &si, &pi))
+    return false;
+  CloseHandle(pi.hProcess);
+  CloseHandle(pi.hThread);
+  return true;
+}
+
+static bool writeDeferredCleanup(const fs::path& removePath) {
+  const auto script = appDataDir() / "pp-update-cleanup.ps1";
+  ensureDir(appDataDir());
+  std::ofstream out(script);
+  out << "param([int]$Pid, [string]$RemovePath)\n";
+  out << "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 250 }\n";
+  out << "Remove-Item -LiteralPath $RemovePath -Force -ErrorAction SilentlyContinue\n";
+  out << "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n";
+
+  std::string cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                    script.string() + "\" -Pid " + std::to_string(GetCurrentProcessId()) + " -RemovePath \"" +
+                    removePath.string() + "\"";
+  return launchDetachedCommand(std::move(cmd));
+}
+
+static bool writeDeferredReplace(const fs::path& staging, const fs::path& dest) {
+  const auto script = appDataDir() / "pp-update-apply.ps1";
+  ensureDir(appDataDir());
+  std::ofstream out(script);
+  out << "param([int]$Pid, [string]$NewPath, [string]$DestPath)\n";
+  out << "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 250 }\n";
+  out << "Move-Item -LiteralPath $NewPath -Destination $DestPath -Force\n";
+  out << "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n";
+
+  std::string cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                    script.string() + "\" -Pid " + std::to_string(GetCurrentProcessId()) + " -NewPath \"" +
+                    staging.string() + "\" -DestPath \"" + dest.string() + "\"";
+  return launchDetachedCommand(std::move(cmd));
+}
+
+bool replaceInstalledBinary(const fs::path& src, std::string& errorOut) {
+  const auto destDir = installDir();
+  ensureDir(destDir);
+  const auto dest = destDir / "pp.exe";
+  const auto backup = destDir / "pp.old.exe";
+  const auto staging = destDir / "pp.new.exe";
+
+  std::error_code ec;
+  fs::remove(backup, ec);
+  ec.clear();
+  fs::remove(staging, ec);
+  ec.clear();
+
+  if (fs::exists(dest)) {
+    fs::rename(dest, backup, ec);
+    if (!ec) {
+      fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
+      if (!ec) {
+        writeDeferredCleanup(backup);
+        return true;
+      }
+      fs::rename(backup, dest, ec);
+      errorOut = "copy after rename failed: " + ec.message();
+    } else {
+      errorOut = "rename failed (file in use?): " + ec.message();
+    }
+  }
+
+  ec.clear();
+  fs::copy_file(src, staging, fs::copy_options::overwrite_existing, ec);
+  if (ec) {
+    errorOut = "staging copy failed: " + ec.message();
+    return false;
+  }
+  if (!writeDeferredReplace(staging, dest)) {
+    errorOut = "could not launch deferred updater";
+    return false;
+  }
+  return true;
 }
 
 static bool removeFromUserPath(const fs::path& dir) {

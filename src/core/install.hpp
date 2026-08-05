@@ -11,6 +11,7 @@ bool installHook();
 bool uninstallHook();
 bool refreshHookScript();
 bool installBinaryToPath(const std::filesystem::path& src, bool updatePath);
+bool replaceInstalledBinary(const std::filesystem::path& src, std::string& errorOut);
 bool addInstallDirToPath();
 std::string getExePath();
 
