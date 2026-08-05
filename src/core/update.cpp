@@ -213,6 +213,7 @@ bool performUpdate(bool force) {
     return false;
   }
 
+  refreshHookScript();
   cleanupDir(tempRoot);
   progress.done("updated to " + release->version);
   out::dim("Restart your terminal, then run: pp version");

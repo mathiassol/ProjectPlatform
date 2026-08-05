@@ -13,20 +13,23 @@ function Sync-PpProject {
     return $null
 }
 
+function Invoke-PpScript {
+    param([string[]]$PpArgs)
+    $script = (& pp.exe @PpArgs 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -eq 0 -and $script) {
+        Invoke-Expression $script
+    }
+    return $LASTEXITCODE
+}
+
 function Invoke-PpEnvApply {
-    $block = & pp.exe env apply --shell 2>$null
-    if ($LASTEXITCODE -eq 0 -and $block) { Invoke-Expression $block }
+    [void](Invoke-PpScript @('env', 'apply', '--shell'))
 }
 
 function Invoke-PpEnvShell {
     param([string[]]$EnvArgs)
-    $shellArgs = @('env') + $EnvArgs + @('--shell')
-    $block = & pp.exe @shellArgs 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        & pp.exe env @EnvArgs
-        return
-    }
-    if ($block) { Invoke-Expression $block }
+    $code = Invoke-PpScript @('env') + $EnvArgs + @('--shell')
+    if ($code -ne 0) { & pp.exe env @EnvArgs }
 }
 
 function Invoke-PpCd {
@@ -36,7 +39,7 @@ function Invoke-PpCd {
         & pp.exe cd $Name
         return $false
     }
-    & pp.exe env clear --shell 2>$null | ForEach-Object { Invoke-Expression $_ }
+    [void](Invoke-PpScript @('env', 'clear', '--shell'))
     Set-Location $path
     $env:PP_PROJECT = $Name
     $env:PP_PROJECT_PATH = $path
