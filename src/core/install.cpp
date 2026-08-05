@@ -291,6 +291,8 @@ bool installSelf() {
     return false;
   }
 
+  ensureHookScriptFresh();
+
   progress.done(std::string("ProjectPlatform ") + PP_APP_VERSION + " installed to " + installDir().string());
   out::blank();
   out::info("Restart your terminal, then run:  pp list");
@@ -333,11 +335,24 @@ static void appendHookToProfile(const fs::path& profile) {
 
 bool refreshHookScript() { return writeHookScript(); }
 
+bool ensureHookScriptFresh() {
+  const auto path = hookScriptPath();
+  if (fs::exists(path)) {
+    std::ifstream in(path);
+    const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (content.find("Invoke-PpScript") != std::string::npos) return true;
+  }
+  return writeHookScript();
+}
+
 bool installHook() {
   writeHookScript();
   appendHookToProfile(profilePath(true));
   appendHookToProfile(profilePath(false));
-  out::success("hook installed — restart PowerShell, then use: pp cd <name>");
+  out::success("hook installed");
+  out::dim("Reload this session:");
+  out::dim("  . \"" + hookScriptPath().string() + "\"");
+  out::dim("Or open a new PowerShell window.");
   return true;
 }
 

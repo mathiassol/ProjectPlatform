@@ -299,11 +299,18 @@ static int cmdScript(const Args& args) {
 
 static int cmdHook(const Args& args) {
   if (args.positional.size() < 2) {
-    out::error("usage: pp hook install|uninstall|status");
+    out::error("usage: pp hook install|reload|uninstall|status");
     return 1;
   }
   const auto& sub = args.positional[1];
   if (sub == "install") return installHook() ? 0 : 1;
+  if (sub == "reload" || sub == "refresh") {
+    refreshHookScript();
+    out::success("hook script updated");
+    out::dim("Reload this session:");
+    out::dim("  . \"" + hookScriptPath().string() + "\"");
+    return 0;
+  }
   if (sub == "uninstall" || sub == "remove") return uninstallHook() ? 0 : 1;
   if (sub == "status") {
     const auto marker = "# ProjectPlatform hook";
