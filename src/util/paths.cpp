@@ -100,6 +100,7 @@ Config loadConfig() {
   if (auto v = jsonGetString(json, "projects_dir")) cfg.projects_dir = expandEnv(*v);
   if (auto v = jsonGetString(json, "templates_dir")) cfg.templates_dir = expandEnv(*v);
   if (auto v = jsonGetString(json, "version")) cfg.version = *v;
+  if (auto v = jsonGetString(json, "editor")) cfg.editor = *v;
   return cfg;
 }
 
@@ -109,7 +110,8 @@ void saveConfig(const Config& cfg) {
   out << "{\n"
       << "  \"projects_dir\": \"" << jsonEscape(cfg.projects_dir.string()) << "\",\n"
       << "  \"templates_dir\": \"" << jsonEscape(cfg.templates_dir.string()) << "\",\n"
-      << "  \"version\": \"" << jsonEscape(cfg.version) << "\"\n"
+      << "  \"version\": \"" << jsonEscape(cfg.version) << "\",\n"
+      << "  \"editor\": \"" << jsonEscape(cfg.editor) << "\"\n"
       << "}\n";
 }
 

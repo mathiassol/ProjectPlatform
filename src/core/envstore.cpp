@@ -1,6 +1,7 @@
 #include "core/envstore.hpp"
 
 #include "core/secrets.hpp"
+#include "core/install.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 #include "util/progress.hpp"
@@ -18,6 +19,13 @@ static std::string trim(std::string s) {
   size_t i = 0;
   while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
   return s.substr(i);
+}
+
+static void stripUtf8Bom(std::string& s) {
+  if (s.size() >= 3 && static_cast<unsigned char>(s[0]) == 0xEF &&
+      static_cast<unsigned char>(s[1]) == 0xBB && static_cast<unsigned char>(s[2]) == 0xBF) {
+    s.erase(0, 3);
+  }
 }
 
 static std::string unquote(std::string v) {
@@ -61,6 +69,7 @@ bool parseDotEnvFile(const fs::path& path, std::vector<EnvVar>& out, bool) {
   std::string line;
   while (std::getline(in, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
+    stripUtf8Bom(line);
     line = trim(line);
     if (line.empty() || line[0] == '#') continue;
     if (line.rfind("export ", 0) == 0) line = trim(line.substr(7));
@@ -69,6 +78,7 @@ bool parseDotEnvFile(const fs::path& path, std::vector<EnvVar>& out, bool) {
     EnvVar v;
     v.key = trim(line.substr(0, eq));
     v.value = unquote(trim(line.substr(eq + 1)));
+    while (!v.value.empty() && v.value.back() == ';') v.value.pop_back();
     v.source = path.filename().string();
     if (!v.key.empty()) out.push_back(std::move(v));
   }
@@ -255,7 +265,154 @@ std::vector<fs::path> discoverEnvFiles(const fs::path& project) {
   return found;
 }
 
-EnvBundle collectEnv(EnvScope scope, const fs::path& project, bool includeRemembered) {
+fs::path profilesDir(EnvScope scope, const fs::path& project) {
+  if (scope == EnvScope::Global) return appDataDir() / "env" / "profiles";
+  return project / ".pp" / "env" / "profiles";
+}
+
+fs::path profileFile(EnvScope scope, const fs::path& project, const std::string& name) {
+  std::string n = name;
+  if (n.size() >= 4 && n.substr(n.size() - 4) == ".env") n = n.substr(0, n.size() - 4);
+  return profilesDir(scope, project) / (n + ".env");
+}
+
+fs::path activeProfileFile(EnvScope scope, const fs::path& project) {
+  if (scope == EnvScope::Global) return appDataDir() / "env" / "active.profile";
+  return project / ".pp" / "active.profile";
+}
+
+static fs::path bundledEnvTemplatesDir() {
+  const auto exe = getExePath();
+  if (exe.empty()) return {};
+  fs::path p = exe;
+  p = p.parent_path();
+  for (int i = 0; i < 8; ++i) {
+    const auto cand = p / "assets" / "env-templates";
+    if (fs::exists(cand)) return cand;
+    if (p == p.parent_path()) break;
+    p = p.parent_path();
+  }
+  return appDataDir() / "env-templates";
+}
+
+fs::path envTemplatePath(const std::string& name) {
+  std::string n = name;
+  if (n.size() < 4 || n.substr(n.size() - 4) != ".env") n += ".env";
+  const auto dir = bundledEnvTemplatesDir();
+  const auto path = dir / n;
+  if (fs::exists(path)) return path;
+  return {};
+}
+
+std::vector<std::string> listProfiles(EnvScope scope, const fs::path& project) {
+  std::vector<std::string> names;
+  const auto dir = profilesDir(scope, project);
+  if (!fs::exists(dir)) return names;
+  for (const auto& entry : fs::directory_iterator(dir)) {
+    if (!entry.is_regular_file()) continue;
+    if (entry.path().extension() != ".env") continue;
+    names.push_back(entry.path().stem().string());
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+std::optional<std::string> getActiveProfile(EnvScope scope, const fs::path& project) {
+  const auto path = activeProfileFile(scope, project);
+  if (!fs::exists(path)) return std::nullopt;
+  std::ifstream in(path);
+  std::string line;
+  if (!std::getline(in, line)) return std::nullopt;
+  line = trim(line);
+  if (line.empty() || line[0] == '#') return std::nullopt;
+  return line;
+}
+
+bool setActiveProfile(EnvScope scope, const fs::path& project, const std::string& name) {
+  const auto file = profileFile(scope, project, name);
+  if (!fs::exists(file)) return false;
+  ensureDir(activeProfileFile(scope, project).parent_path());
+  std::ofstream out(activeProfileFile(scope, project));
+  out << name << "\n";
+  return static_cast<bool>(out);
+}
+
+static bool writeDefaultProfileTemplate(const fs::path& dest) {
+  std::ofstream out(dest);
+  out << "# PP env profile — edit with: pp env edit\n";
+  out << "# export KEY=value\n\n";
+  out << "export EXAMPLE_KEY=change-me\n";
+  return static_cast<bool>(out);
+}
+
+bool createProfile(EnvScope scope, const fs::path& project, const std::string& name,
+                   const fs::path& from, const std::string& templateName) {
+  const auto dest = profileFile(scope, project, name);
+  if (fs::exists(dest)) return false;
+  ensureDir(dest.parent_path());
+
+  if (!from.empty() && fs::exists(from)) {
+    std::error_code ec;
+    fs::copy_file(from, dest, ec);
+    return !ec;
+  }
+  if (!templateName.empty()) {
+    const auto tpl = envTemplatePath(templateName);
+    if (!tpl.empty() && fs::exists(tpl)) {
+      std::error_code ec;
+      fs::copy_file(tpl, dest, ec);
+      return !ec;
+    }
+  }
+  return writeDefaultProfileTemplate(dest);
+}
+
+bool importProfile(EnvScope scope, const fs::path& project, const std::string& name,
+                   const fs::path& source) {
+  if (!fs::exists(source)) return false;
+  const auto dest = profileFile(scope, project, name);
+  ensureDir(dest.parent_path());
+  std::error_code ec;
+  fs::copy_file(source, dest, fs::copy_options::overwrite_existing, ec);
+  return !ec;
+}
+
+bool installEnvTemplates() {
+  const auto src = bundledEnvTemplatesDir();
+  if (src.empty() || !fs::exists(src)) return true;
+  const auto dest = appDataDir() / "env-templates";
+  ensureDir(dest);
+  for (const auto& entry : fs::directory_iterator(src)) {
+    if (!entry.is_regular_file()) continue;
+    std::error_code ec;
+    fs::copy_file(entry.path(), dest / entry.path().filename(),
+                  fs::copy_options::overwrite_existing, ec);
+  }
+  return true;
+}
+
+bool resolveProfilePath(EnvScope scope, const fs::path& project, const std::string& nameOrPath,
+                        fs::path& out) {
+  if (nameOrPath.find('/') != std::string::npos || nameOrPath.find('\\') != std::string::npos ||
+      (nameOrPath.size() > 1 && nameOrPath[1] == ':')) {
+    out = fs::path(nameOrPath);
+    return fs::exists(out);
+  }
+  out = profileFile(scope, project, nameOrPath);
+  return fs::exists(out);
+}
+
+static void mergeProfileFile(std::map<std::string, EnvVar>& merged, const fs::path& file) {
+  std::vector<EnvVar> fromFile;
+  if (!parseDotEnvFile(file, fromFile, false)) return;
+  for (auto& v : fromFile) {
+    v.source = "profile:" + file.stem().string();
+    merged[v.key] = std::move(v);
+  }
+}
+
+EnvBundle collectEnv(EnvScope scope, const fs::path& project, bool includeRemembered,
+                     const std::string& profileName) {
   EnvBundle bundle;
   std::map<std::string, EnvVar> merged;
 
@@ -271,16 +428,18 @@ EnvBundle collectEnv(EnvScope scope, const fs::path& project, bool includeRememb
       loadRememberedFiles(paths.remembered_file, remembered);
       for (const auto& rel : remembered) {
         const auto file = project / fs::path(rel);
-        std::vector<EnvVar> fromFile;
-        if (parseDotEnvFile(file, fromFile, false)) {
-          for (auto& v : fromFile) merged[v.key] = v;
-        }
-      }
-      for (const auto& discovered : discoverEnvFiles(project)) {
-        const auto rel = fs::relative(discovered, project).generic_string();
-        if (std::find(remembered.begin(), remembered.end(), rel) != remembered.end()) continue;
+        mergeProfileFile(merged, file);
       }
     }
+  }
+
+  std::string active = profileName;
+  if (active.empty()) {
+    if (auto a = getActiveProfile(scope, project)) active = *a;
+  }
+  if (!active.empty()) {
+    const auto pf = profileFile(scope, project, active);
+    if (fs::exists(pf)) mergeProfileFile(merged, pf);
   }
 
   for (const auto& [k, v] : merged) {
@@ -288,6 +447,49 @@ EnvBundle collectEnv(EnvScope scope, const fs::path& project, bool includeRememb
     bundle.keys.push_back(k);
   }
   return bundle;
+}
+
+static std::string jsonEscape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size() + 8);
+  for (char c : s) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '"': out += "\\\""; break;
+      case '\n': out += "\\n"; break;
+      case '\r': out += "\\r"; break;
+      case '\t': out += "\\t"; break;
+      default: out += c;
+    }
+  }
+  return out;
+}
+
+std::string formatJsonApply(const EnvBundle& bundle) {
+  std::ostringstream o;
+  o << "{\"keys\":[";
+  for (size_t i = 0; i < bundle.keys.size(); ++i) {
+    if (i) o << ',';
+    o << '"' << jsonEscape(bundle.keys[i]) << '"';
+  }
+  o << "],\"vars\":{";
+  for (size_t i = 0; i < bundle.vars.size(); ++i) {
+    if (i) o << ',';
+    o << '"' << jsonEscape(bundle.vars[i].key) << "\":\"" << jsonEscape(bundle.vars[i].value) << '"';
+  }
+  o << "}}";
+  return o.str();
+}
+
+std::string formatJsonClear(const std::vector<std::string>& keys) {
+  std::ostringstream o;
+  o << "{\"clear\":true,\"keys\":[";
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (i) o << ',';
+    o << '"' << jsonEscape(keys[i]) << '"';
+  }
+  o << "]}";
+  return o.str();
 }
 
 std::string formatPowerShellApply(const EnvBundle& bundle) {

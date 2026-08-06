@@ -20,7 +20,15 @@ struct Args {
   bool shell_output = false;
   bool all = false;
   bool check_only = false;
+  bool dry_run = false;
+  bool auto_no_agent = false;
+  bool auto_prompt_setup = false;
+  int task_count = 0;
   std::string type = "ps1";
+  std::string profile;
+  std::string from_path;
+  std::string as_name;
+  std::string template_name;
 };
 
 Args parseArgs(int argc, char** argv);

@@ -1,7 +1,10 @@
 #include "cli/commands.hpp"
+#include "cli/auto_commands.hpp"
 #include "cli/env_commands.hpp"
+#include "cli/plugin_commands.hpp"
 
 #include "core/install.hpp"
+#include "core/restart.hpp"
 #include "core/update.hpp"
 #include "util/version.hpp"
 #include "core/projects.hpp"
@@ -9,6 +12,7 @@
 #include "core/templates.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
+#include "util/editor.hpp"
 
 #include <fstream>
 #include <windows.h>
@@ -42,12 +46,22 @@ static void printHelp() {
   out::info("Scripts  (global: Projects/.scripts, project: <project>/.scripts)");
   out::dim("  pp script list [--global|-g|--project|-p]");
   out::dim("  pp script run <name> [--global|-g] [args...]");
+  out::dim("  pp script edit <name> [--global|-g]     Open script in editor");
   out::dim("  pp script new <name> [--global|-g] [--type ps1|bat]");
   out::dim("  pp script delete <name> [--global|-g] [--force]");
   out::blank();
   out::info("Environment & secrets");
   out::dim("  pp env set/get/list/load/apply/clear   Manage env vars & .env files");
   out::dim("  pp env help                            Full env command reference");
+  out::blank();
+  out::info("Plugins");
+  out::dim("  pp plugin list                    List installed plugins");
+  out::dim("  pp plugin info <name>             Show plugin commands");
+  out::dim("  pp <prefix> <cmd>                 Run a plugin command (e.g. pp ai setup)");
+  out::blank();
+  out::info("Automations  (AI tasks via Cursor CLI — independent of pp ai)");
+  out::dim("  pp auto list|init|run|upload        Manage AI automations");
+  out::dim("  pp auto help                        Full automation reference");
   out::blank();
   out::info("Shell & setup");
   out::dim("  pp update [--check] [--force]   Check/install latest GitHub release");
@@ -56,6 +70,9 @@ static void printHelp() {
   out::dim("  pp hook install            Enable pp cd/goto in terminal (+ project prompt)");
   out::dim("  pp hook uninstall");
   out::dim("  pp hook status             Show whether shell integration is active");
+  out::dim("  pp restart                 Restart terminal and restore session");
+  out::dim("  pp editor setup            Set Zed as default for scripts/env files");
+  out::dim("  pp editor status           Show editor config and associations");
   out::dim("  pp config                  Show paths/config");
   out::dim("  pp code [name]             Open project in VS Code");
 }
@@ -226,13 +243,15 @@ static int cmdTemplate(const Args& args) {
 
 static int cmdScript(const Args& args) {
   if (args.positional.size() < 2) {
-    out::error("usage: pp script <list|run|new|delete> ...");
+    out::error("usage: pp script <list|run|edit|new|delete> ...");
     return 1;
   }
 
   ScriptScope scope = ScriptScope::Project;
   if (args.global) scope = ScriptScope::Global;
   if (args.project_scope) scope = ScriptScope::Project;
+
+  const bool explicitScope = args.global || args.project_scope;
 
   fs::path project;
   if (scope == ScriptScope::Project) {
@@ -275,7 +294,14 @@ static int cmdScript(const Args& args) {
       return 1;
     }
     std::vector<std::string> scriptArgs(args.positional.begin() + 3, args.positional.end());
-    return runScript(args.positional[2], scope, project, scriptArgs) ? 0 : 1;
+    return runScript(args.positional[2], scope, project, scriptArgs, explicitScope) ? 0 : 1;
+  }
+  if (sub == "edit" || sub == "open") {
+    if (args.positional.size() < 3) {
+      out::error("usage: pp script edit <name> [--global|-g]");
+      return 1;
+    }
+    return editScript(args.positional[2], scope, project, explicitScope) ? 0 : 1;
   }
   if (sub == "new" || sub == "create") {
     if (args.positional.size() < 3) {
@@ -291,7 +317,7 @@ static int cmdScript(const Args& args) {
       out::error("usage: pp script delete <name> [--force]");
       return 1;
     }
-    return deleteScript(args.positional[2], scope, project, args.force) ? 0 : 1;
+    return deleteScript(args.positional[2], scope, project, args.force, explicitScope) ? 0 : 1;
   }
   out::error("unknown script subcommand: " + sub);
   return 1;
@@ -308,7 +334,7 @@ static int cmdHook(const Args& args) {
     refreshHookScript();
     out::success("hook script updated");
     out::dim("Reload this session:");
-    out::dim("  . \"" + hookScriptPath().string() + "\"");
+    out::dim("  . $PROFILE");
     return 0;
   }
   if (sub == "uninstall" || sub == "remove") return uninstallHook() ? 0 : 1;
@@ -350,11 +376,44 @@ static int cmdHook(const Args& args) {
   return 1;
 }
 
+static int cmdEditor(const Args& args) {
+  if (args.positional.size() < 2) {
+    out::error("usage: pp editor setup|status");
+    return 1;
+  }
+  const auto& sub = args.positional[1];
+  if (sub == "setup" || sub == "install" || sub == "zed") return configureZedAsDefaultEditor() ? 0 : 1;
+  if (sub == "status") {
+    showEditorStatus();
+    return 0;
+  }
+  out::error("unknown editor subcommand: " + sub);
+  out::dim("usage: pp editor setup|status");
+  return 1;
+}
+
+static int cmdRestart(const Args&) {
+  RestartSession session;
+  captureRestartSession(session);
+  if (!saveRestartSession(session)) {
+    out::error("could not save restart session");
+    return 1;
+  }
+  if (!spawnRestartTerminal(restartSessionPath())) {
+    return 1;
+  }
+  out::success("new terminal started — session saved to " + restartSessionPath().string());
+  out::dim("With hook: this window closes automatically");
+  out::dim("Without hook: close this window manually");
+  return 0;
+}
+
 static int cmdConfig(const Args&) {
   const auto cfg = loadConfig();
   out::title("ProjectPlatform config");
   out::dim("projects:  " + cfg.projects_dir.string());
   out::dim("templates: " + cfg.templates_dir.string());
+  out::dim("editor:    " + (cfg.editor.empty() ? std::string("(system default)") : cfg.editor));
   out::dim("install:   " + installDir().string());
   out::dim("config:    " + configPath().string());
   if (auto cur = getCurrentProject()) out::dim("current:   " + *cur);
@@ -385,6 +444,8 @@ int runCommand(const Args& args) {
   if (cmd == "uninstall") return uninstallSelf() ? 0 : 1;
   if (cmd == "config") return cmdConfig(args);
   if (cmd == "hook") return cmdHook(args);
+  if (cmd == "editor") return cmdEditor(args);
+  if (cmd == "restart") return cmdRestart(args);
 
   if (cmd == "list" || cmd == "ls") return cmdList(args);
   if (cmd == "new" || cmd == "init") {
@@ -449,6 +510,10 @@ int runCommand(const Args& args) {
   if (cmd == "template" || cmd == "tpl") return cmdTemplate(args);
   if (cmd == "script" || cmd == "scripts") return cmdScript(args);
   if (cmd == "env" || cmd == "secrets") return runEnvCommand(args);
+  if (cmd == "plugin" || cmd == "plugins") return runPluginCommandCli(args);
+  if (cmd == "auto" || cmd == "automation" || cmd == "automations") return runAutoCommand(args);
+
+  if (auto pluginResult = tryDispatchPlugin(args)) return *pluginResult;
 
   out::error("unknown command: " + cmd);
   out::dim("run 'pp help' for usage");

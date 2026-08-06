@@ -1,4 +1,7 @@
 #include "core/install.hpp"
+#include "core/plugins.hpp"
+#include "core/automations.hpp"
+#include "core/envstore.hpp"
 
 #include "util/output.hpp"
 #include "util/paths.hpp"
@@ -75,7 +78,19 @@ bool installBinaryToPath(const fs::path& src, bool updatePath) {
   const auto dest = destDir / "pp.exe";
   std::error_code ec;
   fs::copy_file(src, dest, fs::copy_options::overwrite_existing, ec);
-  if (ec) return false;
+  if (ec) {
+    const auto staging = destDir / "pp.staging.exe";
+    std::error_code ec2;
+    fs::copy_file(src, staging, fs::copy_options::overwrite_existing, ec2);
+    if (!ec2) {
+      fs::remove(dest, ec);
+      fs::rename(staging, dest, ec);
+    }
+    if (ec) {
+      out::dim("copy failed: " + ec.message() + " (close other pp.exe terminals and retry)");
+      return false;
+    }
+  }
   if (updatePath) return addInstallDirToPath();
   return true;
 }
@@ -188,11 +203,39 @@ static bool removeFromUserPath(const fs::path& dir) {
   return writeUserPath(result);
 }
 
+static std::string psSingleQuote(const std::string& s) {
+  std::string out = "'";
+  for (char c : s) {
+    if (c == '\'') out += "''";
+    else out.push_back(c);
+  }
+  out += "'";
+  return out;
+}
+
+static std::string hookProfileBlock() {
+  std::ostringstream o;
+  o << "# ProjectPlatform hook\n";
+  o << "$PP_HOOK_PATH = " << psSingleQuote(hookScriptPath().string()) << "\n";
+  o << "function pp {\n";
+  o << "    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)\n";
+  o << "    . $PP_HOOK_PATH\n";
+  o << "    pp-hook-dispatch @Args\n";
+  o << "}\n";
+  o << "function prompt {\n";
+  o << "    . $PP_HOOK_PATH\n";
+  o << "    pp-hook-prompt\n";
+  o << "}\n";
+  o << "# End ProjectPlatform hook\n";
+  return o.str();
+}
+
 static bool writeHookScript() {
   ensureDir(appDataDir());
   std::ofstream out(hookScriptPath());
-  out << R"(# ProjectPlatform shell hook - auto-generated
-# Makes `pp cd`, `pp goto`, `pp enter` actually change directory.
+  out << "# ProjectPlatform shell hook - auto-generated\n";
+  out << "# PP_HOOK_VERSION=" << PP_APP_VERSION << "\n";
+  out << R"PPHOOK(# Loaded via $PROFILE wrapper (re-sources this file each call).
 
 function Sync-PpProject {
     $info = & pp.exe here --json 2>$null
@@ -207,22 +250,40 @@ function Sync-PpProject {
     return $null
 }
 
-function Invoke-PpScript {
+function Invoke-PpEnvJson {
     param([string[]]$PpArgs)
-    $script = (& pp.exe @PpArgs 2>$null | Out-String).Trim()
-    if ($LASTEXITCODE -eq 0 -and $script) {
-        Invoke-Expression $script
+    $raw = (& pp.exe @PpArgs 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $raw -or $raw[0] -ne '{') { return $LASTEXITCODE }
+    try {
+        $data = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        return 1
     }
-    return $LASTEXITCODE
+    if ($data.clear) {
+        foreach ($k in @($data.keys)) {
+            Remove-Item -Path ("Env:" + $k) -ErrorAction SilentlyContinue
+        }
+        $script:PP_ENV_KEYS = @()
+        Remove-Item Env:PP_ENV_LOADED -ErrorAction SilentlyContinue
+    } else {
+        if ($data.keys) { $script:PP_ENV_KEYS = @($data.keys) }
+        if ($data.vars) {
+            foreach ($prop in $data.vars.PSObject.Properties) {
+                Set-Item -Path ("Env:" + $prop.Name) -Value ([string]$prop.Value)
+            }
+            $env:PP_ENV_LOADED = '1'
+        }
+    }
+    return 0
 }
 
 function Invoke-PpEnvApply {
-    [void](Invoke-PpScript @('env', 'apply', '--shell'))
+    [void](Invoke-PpEnvJson @('env', 'apply', '--shell'))
 }
 
 function Invoke-PpEnvShell {
     param([string[]]$EnvArgs)
-    $code = Invoke-PpScript @('env') + $EnvArgs + @('--shell')
+    $code = Invoke-PpEnvJson @('env') + $EnvArgs + @('--shell')
     if ($code -ne 0) { & pp.exe env @EnvArgs }
 }
 
@@ -233,7 +294,7 @@ function Invoke-PpCd {
         & pp.exe cd $Name
         return $false
     }
-    [void](Invoke-PpScript @('env', 'clear', '--shell'))
+    [void](Invoke-PpEnvJson @('env', 'clear', '--shell'))
     Set-Location $path
     $env:PP_PROJECT = $Name
     $env:PP_PROJECT_PATH = $path
@@ -242,8 +303,95 @@ function Invoke-PpCd {
     return $true
 }
 
-function pp {
+function pp-hook-restore {
+    param([string]$SessionPath)
+    if (-not (Test-Path $SessionPath)) {
+        Write-Host '[pp] No restart session found' -ForegroundColor Yellow
+        return
+    }
+    try {
+        $data = Get-Content -Path $SessionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        Write-Host '[pp] Could not read restart session' -ForegroundColor Red
+        return
+    }
+    if ($data.project_path -and (Test-Path $data.project_path)) {
+        Set-Location $data.project_path
+    } elseif ($data.cwd -and (Test-Path $data.cwd)) {
+        Set-Location $data.cwd
+    }
+    if ($data.project) {
+        $env:PP_PROJECT = [string]$data.project
+        if ($data.project_path) { $env:PP_PROJECT_PATH = [string]$data.project_path }
+        & pp.exe cd $data.project --quiet 2>$null | Out-Null
+    }
+    if ($data.env_vars) {
+        $keys = @()
+        foreach ($prop in $data.env_vars.PSObject.Properties) {
+            Set-Item -Path ("Env:" + $prop.Name) -Value ([string]$prop.Value)
+            $keys += $prop.Name
+        }
+        $script:PP_ENV_KEYS = $keys
+        $env:PP_ENV_LOADED = '1'
+    } elseif ($data.project) {
+        Invoke-PpEnvApply
+    }
+    Remove-Item $SessionPath -ErrorAction SilentlyContinue
+    Write-Host "[pp] Session restored -> $(Get-Location)" -ForegroundColor Green
+}
+
+function Invoke-PpRestart {
+    $sessionPath = Join-Path $env:TEMP 'pp-restart-session.json'
+    $envVars = [ordered]@{}
+    $keys = @()
+    if ($script:PP_ENV_KEYS -and @($script:PP_ENV_KEYS).Count -gt 0) {
+        $keys = @($script:PP_ENV_KEYS)
+        foreach ($k in $keys) {
+            $item = Get-Item -Path ("Env:" + $k) -ErrorAction SilentlyContinue
+            if ($item) { $envVars[$k] = [string]$item.Value }
+        }
+    } elseif ($env:PP_ENV_LOADED -eq '1') {
+        $raw = (& pp.exe env apply --shell 2>$null | Out-String).Trim()
+        if ($raw -and $raw[0] -eq '{') {
+            try {
+                $bundle = $raw | ConvertFrom-Json
+                if ($bundle.keys) { $keys = @($bundle.keys) }
+                if ($bundle.vars) {
+                    foreach ($prop in $bundle.vars.PSObject.Properties) {
+                        $envVars[$prop.Name] = [string]$prop.Value
+                    }
+                }
+            } catch { }
+        }
+    }
+    $project = $env:PP_PROJECT
+    if (-not $project) {
+        $project = (& pp.exe here --json 2>$null)
+        if ($project) { $project = $project.Trim() }
+    }
+    if ($project) { & pp.exe cd $project --quiet 2>$null | Out-Null }
+    $session = [ordered]@{
+        version = 1
+        cwd = (Get-Location).Path
+        project = $project
+        project_path = $env:PP_PROJECT_PATH
+        env_keys = @($keys)
+        env_vars = $envVars
+    }
+    $session | ConvertTo-Json -Depth 6 | Set-Content -Path $sessionPath -Encoding UTF8
+    $hookPath = Join-Path $env:LOCALAPPDATA 'ProjectPlatform\pp-hook.ps1'
+    $init = ". '$($hookPath.Replace("'", "''"))'; pp-hook-restore '$($sessionPath.Replace("'", "''"))'"
+    $shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { (Get-Command pwsh).Source } else { 'powershell.exe' }
+    Start-Process -FilePath $shell -ArgumentList '-NoExit', '-Command', $init
+    exit
+}
+
+function pp-hook-dispatch {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
+    if ($Args.Count -ge 1 -and $Args[0] -eq 'restart') {
+        Invoke-PpRestart
+        return
+    }
     if ($Args.Count -ge 2) {
         $verb = $Args[0]
         if ($verb -in @('cd', 'goto', 'go', 'enter')) {
@@ -259,13 +407,12 @@ function pp {
     & pp.exe @Args
 }
 
-# Alias for users who prefer a dedicated jump command
 function ppgo {
     param([Parameter(Mandatory = $true)][string]$Name)
     Invoke-PpCd -Name $Name
 }
 
-function prompt {
+function pp-hook-prompt {
     $project = Sync-PpProject
     if ($project) {
         "PP:$project> "
@@ -273,7 +420,7 @@ function prompt {
         "PS $(Get-Location)> "
     }
 }
-)";
+)PPHOOK";
   return static_cast<bool>(out);
 }
 
@@ -292,6 +439,9 @@ bool installSelf() {
   }
 
   ensureHookScriptFresh();
+  installBundledPlugins();
+  installBundledAutomations();
+  installEnvTemplates();
 
   progress.done(std::string("ProjectPlatform ") + PP_APP_VERSION + " installed to " + installDir().string());
   out::blank();
@@ -329,29 +479,87 @@ static void appendHookToProfile(const fs::path& profile) {
     if (existing.find(marker) != std::string::npos) return;
   }
   std::ofstream out(profile, std::ios::app);
-  out << "\n" << marker << "\n";
-  out << ". \"" << hookScriptPath().string() << "\"\n";
+  out << "\n" << hookProfileBlock();
 }
 
-bool refreshHookScript() { return writeHookScript(); }
+static bool migrateHookProfile(const fs::path& profile) {
+  if (!fs::exists(profile)) return false;
+  std::ifstream in(profile);
+  std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  const auto marker = "# ProjectPlatform hook";
+  const auto pos = content.find(marker);
+  if (pos == std::string::npos) return false;
+  if (content.find("$PP_HOOK_PATH") != std::string::npos &&
+      content.find("pp-hook-dispatch") != std::string::npos)
+    return false;
+
+  const std::string endMarker = "# End ProjectPlatform hook";
+  const auto end = content.find(endMarker, pos);
+  if (end != std::string::npos) {
+    size_t eraseEnd = end + endMarker.size();
+    while (eraseEnd < content.size() && (content[eraseEnd] == '\r' || content[eraseEnd] == '\n'))
+      ++eraseEnd;
+    content.erase(pos, eraseEnd - pos);
+  } else {
+    content.erase(pos);
+  }
+  while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) content.pop_back();
+  content += "\n\n";
+  content += hookProfileBlock();
+  std::ofstream out(profile);
+  out << content;
+  return true;
+}
+
+static bool migrateHookProfiles() {
+  bool changed = false;
+  if (migrateHookProfile(profilePath(true))) changed = true;
+  if (migrateHookProfile(profilePath(false))) changed = true;
+  return changed;
+}
+
+bool refreshHookScript() {
+  writeHookScript();
+  migrateHookProfiles();
+  return true;
+}
 
 bool ensureHookScriptFresh() {
   const auto path = hookScriptPath();
-  if (fs::exists(path)) {
+  const std::string verLine = std::string("# PP_HOOK_VERSION=") + PP_APP_VERSION;
+  bool hookUpdated = false;
+  bool profileUpdated = false;
+
+  if (!fs::exists(path)) {
+    hookUpdated = writeHookScript();
+  } else {
     std::ifstream in(path);
     const std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    if (content.find("Invoke-PpScript") != std::string::npos) return true;
+    if (content.find("Invoke-PpScript") != std::string::npos ||
+        content.find("pp-hook-dispatch") == std::string::npos ||
+        content.find("pp-hook-restore") == std::string::npos ||
+        content.find(verLine) == std::string::npos) {
+      hookUpdated = writeHookScript();
+    }
   }
-  return writeHookScript();
+
+  profileUpdated = migrateHookProfiles();
+
+  if (hookUpdated || profileUpdated) {
+    out::dim("[pp] Shell hook updated — reload this session: . $PROFILE");
+  }
+  return true;
 }
 
 bool installHook() {
   writeHookScript();
+  migrateHookProfile(profilePath(true));
+  migrateHookProfile(profilePath(false));
   appendHookToProfile(profilePath(true));
   appendHookToProfile(profilePath(false));
   out::success("hook installed");
   out::dim("Reload this session:");
-  out::dim("  . \"" + hookScriptPath().string() + "\"");
+  out::dim("  . $PROFILE");
   out::dim("Or open a new PowerShell window.");
   return true;
 }
@@ -362,7 +570,16 @@ static void stripHookFromProfile(const fs::path& profile) {
   std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   const auto pos = content.find("# ProjectPlatform hook");
   if (pos == std::string::npos) return;
-  content.erase(pos);
+  const std::string endMarker = "# End ProjectPlatform hook";
+  const auto end = content.find(endMarker, pos);
+  if (end != std::string::npos) {
+    size_t eraseEnd = end + endMarker.size();
+    while (eraseEnd < content.size() && (content[eraseEnd] == '\r' || content[eraseEnd] == '\n'))
+      ++eraseEnd;
+    content.erase(pos, eraseEnd - pos);
+  } else {
+    content.erase(pos);
+  }
   std::ofstream out(profile);
   out << content;
 }

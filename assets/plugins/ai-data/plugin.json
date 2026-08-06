@@ -1,0 +1,25 @@
+{
+  "name": "ai-data",
+  "version": "1.3.0",
+  "prefix": "ai",
+  "scope": "global",
+  "description": "Manage ai-data-monorepo from any folder (Enterprise-Plus)",
+  "vars": {
+    "PP_AI_REPO_NAME": "ai-data-monorepo",
+    "PP_AI_REPO_URL": "https://github.com/Enterprise-Plus/ai-data-monorepo.git",
+    "PP_AI_GIT_USER": "mathiassolV"
+  },
+  "commands": {
+    "setup": "setup.ps1",
+    "run": "dev.ps1",
+    "dev": "dev.ps1",
+    "wipe": "wipe.ps1",
+    "env": "env.ps1",
+    "use": "use.ps1",
+    "path": "path.ps1",
+    "status": "status.ps1",
+    "diff": "diff.ps1",
+    "ship": "ship.ps1",
+    ".": "goto.ps1"
+  }
+}

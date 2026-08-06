@@ -2,6 +2,7 @@
 
 #include "core/envstore.hpp"
 #include "core/projects.hpp"
+#include "util/editor.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 
@@ -41,6 +42,12 @@ static void printEnvHelp() {
   out::dim("  pp env get KEY [--global|-g]");
   out::dim("  pp env unset KEY [--global|-g]");
   out::dim("  pp env load [file] [--remember] [--global|-g] [--import]");
+  out::dim("  pp env profiles [--global|-g]          List named env profiles");
+  out::dim("  pp env new <name> [--global|-g] [--from FILE] [--template NAME]");
+  out::dim("  pp env edit [name|file] [--global|-g]  Open profile in editor");
+  out::dim("  pp env use <name> [--global|-g]        Set active profile + apply");
+  out::dim("  pp env import <file> --as <name> [--global|-g]");
+  out::dim("  pp env apply [--global|-g] [--profile NAME]");
   out::dim("  pp env files                     Find .env / .envrc in project");
   out::dim("  pp env remembered                List auto-loaded files");
   out::dim("  pp env forget <file>             Stop auto-loading a file");
@@ -157,13 +164,13 @@ static int cmdEnvLoad(const Args& args) {
     out::info("remembered " + file.filename().string());
   }
 
-  if (args.shell_output) {
+  if (args.shell_output || args.json) {
     EnvBundle bundle;
     for (const auto& v : vars) {
       bundle.vars.push_back(v);
       bundle.keys.push_back(v.key);
     }
-    std::cout << formatPowerShellApply(bundle);
+    std::cout << formatJsonApply(bundle);
     return 0;
   }
 
@@ -224,13 +231,13 @@ static int cmdEnvApply(const Args& args) {
 
   EnvBundle bundle;
   if (scope == EnvScope::Global) {
-    bundle = collectEnv(EnvScope::Global, {}, false);
+    bundle = collectEnv(EnvScope::Global, {}, false, args.profile);
   } else {
     if (project.empty()) {
       out::error("no project context");
       return 1;
     }
-    bundle = collectEnv(EnvScope::Project, project, true);
+    bundle = collectEnv(EnvScope::Project, project, true, args.profile);
   }
 
   if (bundle.vars.empty()) {
@@ -241,13 +248,12 @@ static int cmdEnvApply(const Args& args) {
   const auto paths = scope == EnvScope::Global ? envPaths(EnvScope::Global, {}) : envPaths(EnvScope::Project, project);
   saveSessionKeys(paths.session_file, bundle.keys);
 
-  if (args.shell_output) {
-    std::cout << formatPowerShellApply(bundle);
+  if (args.shell_output || args.json) {
+    std::cout << formatJsonApply(bundle);
     return 0;
   }
 
   out::success("ready to apply " + std::to_string(bundle.vars.size()) + " vars");
-  out::dim("Run in PowerShell: pp env apply --shell ps | Invoke-Expression");
   out::dim("Or enable hook: pp hook install  (then pp env apply works directly)");
   return 0;
 }
@@ -266,13 +272,13 @@ static int cmdEnvClear(const Args& args) {
     keys = loadSessionKeys(paths.session_file);
   }
 
-  if (args.shell_output) {
-    std::cout << formatPowerShellClear(keys);
+  if (args.shell_output || args.json) {
+    std::cout << formatJsonClear(keys);
     return 0;
   }
 
   out::success("clear script ready for " + std::to_string(keys.size()) + " vars");
-  out::dim("Run: pp env clear --shell ps | Invoke-Expression");
+  out::dim("Or enable hook: pp hook install  (then pp env clear works directly)");
   return 0;
 }
 
@@ -291,6 +297,137 @@ static int cmdEnvReset(const Args& args) {
   fs::remove(paths.remembered_file, ec);
   fs::remove(paths.session_file, ec);
   out::success("store reset");
+  return 0;
+}
+
+static int cmdEnvProfiles(const Args& args) {
+  fs::path project;
+  const auto scope = resolveScope(args, project);
+  const auto profiles = listProfiles(scope, project);
+  const auto active = getActiveProfile(scope, project);
+  const std::string label = scope == EnvScope::Global ? "global" : "project";
+  const auto dir = profilesDir(scope, project);
+
+  if (profiles.empty()) {
+    out::dim("no " + label + " profiles in " + dir.string());
+    out::dim("create one: pp env new myapp --global");
+    return 0;
+  }
+
+  out::info(label + " env profiles (" + dir.string() + "):");
+  for (const auto& name : profiles) {
+    std::cout << "  " << name;
+    if (active && *active == name) std::cout << " [active]";
+    std::cout << "\n";
+  }
+  return 0;
+}
+
+static int cmdEnvNew(const Args& args) {
+  if (args.positional.size() < 3) {
+    out::error("usage: pp env new <name> [--global|-g] [--from FILE] [--template NAME]");
+    return 1;
+  }
+  fs::path project;
+  const auto scope = resolveScope(args, project);
+  if (scope == EnvScope::Project && project.empty()) {
+    out::error("no project context; use --global");
+    return 1;
+  }
+
+  const auto& name = args.positional[2];
+  fs::path from;
+  if (!args.from_path.empty()) from = args.from_path;
+
+  if (!createProfile(scope, project, name, from, args.template_name)) {
+    out::error("could not create profile (exists?): " + name);
+    return 1;
+  }
+
+  out::success("created profile: " + profileFile(scope, project, name).string());
+  out::dim("Edit: pp env edit " + name + (scope == EnvScope::Global ? " --global" : ""));
+  return 0;
+}
+
+static int cmdEnvEdit(const Args& args) {
+  fs::path project;
+  const auto scope = resolveScope(args, project);
+  if (scope == EnvScope::Project && project.empty()) {
+    out::error("no project context; use --global or a file path");
+    return 1;
+  }
+
+  fs::path target;
+  if (args.positional.size() >= 3 &&
+      args.positional[2].rfind("--", 0) != 0) {
+    if (!resolveProfilePath(scope, project, args.positional[2], target)) {
+      const fs::path direct(args.positional[2]);
+      if (fs::exists(direct)) target = direct;
+      else {
+        out::error("profile not found: " + args.positional[2]);
+        out::dim("Create: pp env new " + args.positional[2] + " --global");
+        return 1;
+      }
+    }
+  } else if (auto active = getActiveProfile(scope, project)) {
+    target = profileFile(scope, project, *active);
+  } else {
+    out::error("usage: pp env edit <name|file> [--global|-g]");
+    out::dim("Or set active first: pp env use <name>");
+    return 1;
+  }
+
+  return openInEditor(target) ? 0 : 1;
+}
+
+static int cmdEnvUse(const Args& args) {
+  if (args.positional.size() < 3) {
+    out::error("usage: pp env use <name> [--global|-g]");
+    return 1;
+  }
+  fs::path project;
+  const auto scope = resolveScope(args, project);
+  if (scope == EnvScope::Project && project.empty()) {
+    out::error("no project context; use --global");
+    return 1;
+  }
+
+  const auto& name = args.positional[2];
+  if (!setActiveProfile(scope, project, name)) {
+    out::error("profile not found: " + name);
+    out::dim("Create: pp env new " + name + " --global");
+    return 1;
+  }
+
+  out::success("active profile: " + name);
+
+  Args applyArgs = args;
+  applyArgs.positional = {"env", "apply"};
+  applyArgs.profile = name;
+  return cmdEnvApply(applyArgs);
+}
+
+static int cmdEnvImport(const Args& args) {
+  if (args.positional.size() < 3) {
+    out::error("usage: pp env import <file> --as <name> [--global|-g]");
+    return 1;
+  }
+  if (args.as_name.empty()) {
+    out::error("usage: pp env import <file> --as <name>");
+    return 1;
+  }
+
+  fs::path project;
+  const auto scope = resolveScope(args, project);
+  const fs::path source = args.positional[2];
+
+  if (!importProfile(scope, project, args.as_name, source)) {
+    out::error("import failed");
+    return 1;
+  }
+
+  out::success("imported " + source.filename().string() + " as profile '" + args.as_name + "'");
+  out::dim("Use: pp env use " + args.as_name + (scope == EnvScope::Global ? " --global" : ""));
   return 0;
 }
 
@@ -316,6 +453,14 @@ int runEnvCommand(const Args& args) {
   if (sub == "apply") return cmdEnvApply(args);
   if (sub == "clear") return cmdEnvClear(args);
   if (sub == "reset") return cmdEnvReset(args);
+  if (sub == "profiles" || sub == "profile") {
+    if (args.positional.size() >= 3 && args.positional[2] == "list") return cmdEnvProfiles(args);
+    return cmdEnvProfiles(args);
+  }
+  if (sub == "new" || sub == "create") return cmdEnvNew(args);
+  if (sub == "edit" || sub == "open") return cmdEnvEdit(args);
+  if (sub == "use") return cmdEnvUse(args);
+  if (sub == "import") return cmdEnvImport(args);
 
   out::error("unknown env subcommand: " + sub);
   printEnvHelp();

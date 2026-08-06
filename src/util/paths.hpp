@@ -13,6 +13,7 @@ struct Config {
   fs::path projects_dir;
   fs::path templates_dir;
   std::string version = "1.0.0";
+  std::string editor;  // "zed", path to exe, or empty for OS default
 };
 
 Config loadConfig();

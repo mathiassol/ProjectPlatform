@@ -58,11 +58,32 @@ struct EnvBundle {
   std::vector<std::string> keys;
 };
 
-EnvBundle collectEnv(EnvScope scope, const std::filesystem::path& project, bool includeRemembered);
+EnvBundle collectEnv(EnvScope scope, const std::filesystem::path& project, bool includeRemembered,
+                     const std::string& profileName = {});
+std::string formatJsonApply(const EnvBundle& bundle);
+std::string formatJsonClear(const std::vector<std::string>& keys);
 std::string formatPowerShellApply(const EnvBundle& bundle);
 std::string formatPowerShellClear(const std::vector<std::string>& keys);
 bool saveSessionKeys(const std::filesystem::path& sessionFile, const std::vector<std::string>& keys);
 std::vector<std::string> loadSessionKeys(const std::filesystem::path& sessionFile);
+
+std::filesystem::path profilesDir(EnvScope scope, const std::filesystem::path& project = {});
+std::filesystem::path profileFile(EnvScope scope, const std::filesystem::path& project,
+                                  const std::string& name);
+std::filesystem::path activeProfileFile(EnvScope scope, const std::filesystem::path& project);
+std::filesystem::path envTemplatePath(const std::string& name);
+
+std::vector<std::string> listProfiles(EnvScope scope, const std::filesystem::path& project);
+std::optional<std::string> getActiveProfile(EnvScope scope, const std::filesystem::path& project);
+bool setActiveProfile(EnvScope scope, const std::filesystem::path& project,
+                      const std::string& name);
+bool createProfile(EnvScope scope, const std::filesystem::path& project, const std::string& name,
+                   const std::filesystem::path& from = {}, const std::string& templateName = {});
+bool importProfile(EnvScope scope, const std::filesystem::path& project, const std::string& name,
+                   const std::filesystem::path& source);
+bool resolveProfilePath(EnvScope scope, const std::filesystem::path& project,
+                        const std::string& nameOrPath, std::filesystem::path& out);
+bool installEnvTemplates();
 
 std::string psEscape(const std::string& value);
 

@@ -1,6 +1,7 @@
 #include "core/scripts.hpp"
 
 #include "core/projects.hpp"
+#include "util/editor.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 
@@ -18,6 +19,13 @@ static fs::path scriptsRoot(ScriptScope scope, const fs::path& project) {
 }
 
 static bool isScriptExt(const std::string& ext) { return ext == ".ps1" || ext == ".bat"; }
+
+static std::string normalizeScriptName(std::string name) {
+  const fs::path p(name);
+  const auto ext = p.extension().string();
+  if (isScriptExt(ext)) return p.stem().string();
+  return name;
+}
 
 std::vector<ScriptInfo> listScripts(ScriptScope scope, const fs::path& project) {
   std::vector<ScriptInfo> scripts;
@@ -42,14 +50,24 @@ std::vector<ScriptInfo> listScripts(ScriptScope scope, const fs::path& project) 
 
 static std::optional<ScriptInfo> findScript(const std::string& name, ScriptScope scope,
                                             const fs::path& project) {
+  const auto normalized = normalizeScriptName(name);
   for (const auto& s : listScripts(scope, project))
-    if (s.name == name) return s;
+    if (s.name == normalized) return s;
   return std::nullopt;
 }
 
+std::optional<ScriptInfo> resolveScript(const std::string& name, ScriptScope scope,
+                                        const fs::path& project, bool explicitScope) {
+  if (auto script = findScript(name, scope, project)) return script;
+  if (explicitScope) return std::nullopt;
+  if (scope == ScriptScope::Project)
+    return findScript(name, ScriptScope::Global, {});
+  return findScript(name, ScriptScope::Project, project);
+}
+
 bool runScript(const std::string& name, ScriptScope scope, const fs::path& project,
-               const std::vector<std::string>& args) {
-  auto script = findScript(name, scope, project);
+               const std::vector<std::string>& args, bool explicitScope) {
+  auto script = resolveScript(name, scope, project, explicitScope);
   if (!script) {
     out::error("script not found: " + name);
     return false;
@@ -66,6 +84,8 @@ bool runScript(const std::string& name, ScriptScope scope, const fs::path& proje
   if (scope == ScriptScope::Project && !project.empty()) {
     out::info("running in " + project.filename().string());
     SetCurrentDirectoryA(project.string().c_str());
+  } else if (script->scope == ScriptScope::Global) {
+    out::dim("global script");
   }
 
   out::dim("exec: " + cmd);
@@ -107,8 +127,8 @@ bool createScript(const std::string& name, const std::string& ext, ScriptScope s
 }
 
 bool deleteScript(const std::string& name, ScriptScope scope, const fs::path& project,
-                  bool force) {
-  auto script = findScript(name, scope, project);
+                  bool force, bool explicitScope) {
+  auto script = resolveScript(name, scope, project, explicitScope);
   if (!script) {
     out::error("script not found: " + name);
     return false;
@@ -126,6 +146,16 @@ bool deleteScript(const std::string& name, ScriptScope scope, const fs::path& pr
   }
   out::success("deleted script: " + name);
   return true;
+}
+
+bool editScript(const std::string& name, ScriptScope scope, const fs::path& project,
+                bool explicitScope) {
+  auto script = resolveScript(name, scope, project, explicitScope);
+  if (!script) {
+    out::error("script not found: " + name);
+    return false;
+  }
+  return openInEditor(script->path);
 }
 
 }  // namespace pp

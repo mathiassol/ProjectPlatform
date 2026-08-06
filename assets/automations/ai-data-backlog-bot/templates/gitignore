@@ -1,0 +1,7 @@
+repos/**/node_modules
+repos/**/.env*
+repos/**/build
+repos/**/.gradle
+repos/**/dist
+secrets/
+*.log

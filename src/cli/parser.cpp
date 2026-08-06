@@ -19,6 +19,14 @@ Args parseArgs(int argc, char** argv) {
     else if (arg == "--shell" || arg == "ps") a.shell_output = true;
     else if (arg == "--all") a.all = true;
     else if (arg == "--check") a.check_only = true;
+    else if (arg == "--dry-run") a.dry_run = true;
+    else if (arg == "--no-agent") a.auto_no_agent = true;
+    else if (arg == "--setup") a.auto_prompt_setup = true;
+    else if (arg == "--tasks" && i + 1 < argc) a.task_count = std::atoi(argv[++i]);
+    else if (arg == "--profile" && i + 1 < argc) a.profile = argv[++i];
+    else if (arg == "--from" && i + 1 < argc) a.from_path = argv[++i];
+    else if (arg == "--as" && i + 1 < argc) a.as_name = argv[++i];
+    else if (arg == "--template" && i + 1 < argc) a.template_name = argv[++i];
     else if (arg == "--type" && i + 1 < argc) a.type = argv[++i];
     else if (arg.rfind("--", 0) == 0) {
       /* ignore unknown flags for forward compat */

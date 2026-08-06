@@ -1,0 +1,25 @@
+{
+  "id": "ai-data-backlog-bot",
+  "name": "AI-DATA backlog BOT",
+  "version": "1.0.0",
+  "description": "Notion backlog -> isolated repos -> Cursor agent tasks (Enterprise-Plus ai-data-monorepo)",
+  "setup_prompt_file": "setup.prompt.md",
+  "task_prompt_file": "task.prompt.md",
+  "requires": {
+    "cursor_cli": true,
+    "git": true,
+    "notion_mcp": true
+  },
+  "defaults": {
+    "task_count": 3,
+    "repo_url": "https://github.com/Enterprise-Plus/ai-data-monorepo.git",
+    "base_branch": "master",
+    "notion_path": "AI & Data / backlog issues"
+  },
+  "safety": {
+    "never_push_main": true,
+    "require_confirm_upload": true,
+    "max_tasks_per_run": 5,
+    "require_setup_confirm": true
+  }
+}
