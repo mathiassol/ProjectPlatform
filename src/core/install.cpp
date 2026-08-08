@@ -203,6 +203,88 @@ static bool removeFromUserPath(const fs::path& dir) {
   return writeUserPath(result);
 }
 
+struct PathRollback {
+  std::string previous;
+  bool hadEntry = false;
+  bool removed = false;
+};
+
+static bool removeFromUserPathWithRollback(const fs::path& dir, PathRollback& rollback) {
+  if (!readUserPath(rollback.previous)) rollback.previous.clear();
+  rollback.hadEntry = pathContains(rollback.previous, dir.string());
+  if (!rollback.hadEntry) return true;
+  if (!removeFromUserPath(dir)) return false;
+  rollback.removed = true;
+  return true;
+}
+
+static void restoreUserPath(const PathRollback& rollback) {
+  if (rollback.removed && rollback.hadEntry) writeUserPath(rollback.previous);
+}
+
+static bool pathsEqualInsensitive(const fs::path& a, const fs::path& b) {
+  std::error_code ec;
+  const auto ca = fs::weakly_canonical(a, ec);
+  if (ec) return false;
+  const auto cb = fs::weakly_canonical(b, ec);
+  if (ec) return false;
+  return ca == cb;
+}
+
+static bool runningFromInstallDir() {
+  const auto exe = getExePath();
+  if (exe.empty()) return false;
+  std::error_code ec;
+  const auto exeDir = fs::path(exe).parent_path();
+  return pathsEqualInsensitive(exeDir, installDir());
+}
+
+static bool writeDeferredUninstall(const fs::path& appData, const fs::path& binDir) {
+  std::error_code ec;
+  const auto script = fs::temp_directory_path(ec) / "pp-uninstall-cleanup.ps1";
+  if (ec) return false;
+
+  std::ofstream out(script);
+  if (!out) return false;
+  out << "$ErrorActionPreference = 'SilentlyContinue'\n";
+  out << "param([int]$Pid, [string]$AppData, [string]$BinDir)\n";
+  out << "while (Get-Process -Id $Pid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 250 }\n";
+  out << "$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')\n";
+  out << "if ($userPath) {\n";
+  out << "  $bin = $BinDir.ToLower()\n";
+  out << "  $parts = @($userPath -split ';' | Where-Object {\n";
+  out << "    $_ -and ($_.ToLower().Replace('/', '\\') -notlike ('*' + $bin + '*'))\n";
+  out << "  })\n";
+  out << "  [Environment]::SetEnvironmentVariable('Path', ($parts -join ';'), 'User')\n";
+  out << "}\n";
+  out << "Remove-Item -LiteralPath $AppData -Recurse -Force -ErrorAction SilentlyContinue\n";
+  out << "Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue\n";
+
+  std::string cmd = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File \"" +
+                    script.string() + "\" -Pid " + std::to_string(GetCurrentProcessId()) +
+                    " -AppData \"" + appData.string() + "\" -BinDir \"" + binDir.string() + "\"";
+  return launchDetachedCommand(std::move(cmd));
+}
+
+static bool removeAppDataTree(std::string& errorOut) {
+  std::error_code ec;
+  fs::remove_all(appDataDir(), ec);
+  if (ec) {
+    errorOut = ec.message();
+    return false;
+  }
+  return true;
+}
+
+static bool finishScheduledUninstall(Progress& progress) {
+  progress.done("ProjectPlatform uninstall scheduled");
+  out::blank();
+  out::info("Close this terminal to finish removal (PATH + AppData).");
+  out::dim("Your projects and templates in Documents were not deleted.");
+  out::dim("If cleanup does not finish, run: pp uninstall");
+  return true;
+}
+
 static std::string psSingleQuote(const std::string& s) {
   std::string out = "'";
   for (char c : s) {
@@ -454,18 +536,36 @@ bool installSelf() {
 
 bool uninstallSelf() {
   Progress progress("uninstall");
+  const auto dataDir = appDataDir();
+  const auto binDir = installDir();
+  PathRollback pathRollback;
+
   progress.step("removing shell hook from PowerShell profiles");
   uninstallHook();
 
-  progress.step("removing from user PATH");
-  const auto destDir = installDir();
-  removeFromUserPath(destDir);
+  if (runningFromInstallDir()) {
+    progress.step("scheduling AppData + PATH cleanup");
+    if (!writeDeferredUninstall(dataDir, binDir)) {
+      out::error("could not schedule uninstall cleanup");
+      out::dim("Close other pp.exe windows and run: pp uninstall");
+      return false;
+    }
+    return finishScheduledUninstall(progress);
+  }
 
-  progress.step("removing " + appDataDir().string());
-  std::error_code ec;
-  fs::remove_all(appDataDir(), ec);
-  if (ec) {
-    out::error("failed to remove install data: " + ec.message());
+  progress.step("removing " + dataDir.string());
+  std::string removeError;
+  if (!removeAppDataTree(removeError)) {
+    progress.step("scheduling deferred cleanup");
+    if (writeDeferredUninstall(dataDir, binDir)) return finishScheduledUninstall(progress);
+    out::error("failed to remove install data: " + removeError);
+    out::dim("Close other pp.exe windows and run: pp uninstall");
+    return false;
+  }
+
+  progress.step("removing from user PATH");
+  if (!removeFromUserPathWithRollback(binDir, pathRollback)) {
+    out::error("failed to update PATH");
     return false;
   }
 
