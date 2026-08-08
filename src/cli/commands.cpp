@@ -35,7 +35,7 @@ static void printHelp() {
   out::dim("  pp find <query>            Search projects by name");
   out::dim("  pp recent                  Recently used projects");
   out::dim("  pp rename <from> <to>      Rename project");
-  out::dim("  pp remove <name> [--force] Remove project");
+  out::dim("  pp remove <name> [--force] Remove a project folder (not pp itself)");
   out::blank();
   out::info("Templates  (stored in Documents/Templates)");
   out::dim("  pp template list");
@@ -66,7 +66,8 @@ static void printHelp() {
   out::info("Shell & setup");
   out::dim("  pp update [--check] [--force]   Check/install latest GitHub release");
   out::dim("  pp version                      Show version");
-  out::dim("  pp install / uninstall          PATH setup");
+  out::dim("  pp install                      Copy pp to AppData and add to PATH");
+  out::dim("  pp uninstall                    Remove pp from PATH and AppData");
   out::dim("  pp hook install            Enable pp cd/goto in terminal (+ project prompt)");
   out::dim("  pp hook uninstall");
   out::dim("  pp hook status             Show whether shell integration is active");

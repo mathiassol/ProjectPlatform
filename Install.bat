@@ -12,7 +12,7 @@ if not exist "%~dp0pp.exe" (
 )
 
 echo.
-echo  ProjectPlatform v1.3.0
+echo  ProjectPlatform v1.3.1
 echo  =====================
 echo.
 

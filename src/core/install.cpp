@@ -453,11 +453,26 @@ bool installSelf() {
 }
 
 bool uninstallSelf() {
+  Progress progress("uninstall");
+  progress.step("removing shell hook from PowerShell profiles");
+  uninstallHook();
+
+  progress.step("removing from user PATH");
   const auto destDir = installDir();
   removeFromUserPath(destDir);
+
+  progress.step("removing " + appDataDir().string());
   std::error_code ec;
   fs::remove_all(appDataDir(), ec);
-  out::success("ProjectPlatform uninstalled (restart terminal)");
+  if (ec) {
+    out::error("failed to remove install data: " + ec.message());
+    return false;
+  }
+
+  progress.done("ProjectPlatform uninstalled");
+  out::blank();
+  out::info("Restart your terminal to clear PATH changes.");
+  out::dim("Your projects and templates in Documents were not deleted.");
   return true;
 }
 

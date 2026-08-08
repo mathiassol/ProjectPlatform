@@ -37,6 +37,8 @@ pp update --check  # check only, don't install
 
 | Command | Description |
 |---------|-------------|
+| `pp install` | Install to `%LOCALAPPDATA%\\ProjectPlatform\\bin` and PATH |
+| `pp uninstall` | Remove pp from PATH and AppData (projects/templates kept) |
 | `pp update` | Install latest release from GitHub |
 | `pp list` | List projects |
 | `pp cd <name>` | Jump to project (needs `pp hook install`) |
