@@ -1,18 +1,20 @@
 #include "util/output.hpp"
 
-#include <windows.h>
+#include "platform/platform.hpp"
 
 namespace pp {
 namespace out {
 
-static bool g_vt = false;
+static bool g_vt = true;
 
 void initConsole() {
-  HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-  if (hOut == INVALID_HANDLE_VALUE) return;
-  DWORD mode = 0;
-  if (!GetConsoleMode(hOut, &mode)) return;
-  if (SetConsoleMode(hOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING)) g_vt = true;
+  platform::initConsole();
+#if defined(_WIN32)
+  // VT may still be off if console mode failed; keep colors opportunistic.
+  g_vt = true;
+#else
+  g_vt = true;
+#endif
 }
 
 static const char* code(Color c) {

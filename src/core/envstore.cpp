@@ -131,7 +131,7 @@ bool loadSecretsFile(const fs::path& path, std::map<std::string, EnvVar>& out) {
 bool saveSecretsFile(const fs::path& path, const std::map<std::string, EnvVar>& vars) {
   ensureDir(path.parent_path());
   std::ofstream out(path);
-  out << "# ProjectPlatform secrets (DPAPI encrypted, user-local)\n";
+  out << "# ProjectPlatform secrets (encrypted, user-local)\n";
   for (const auto& [k, v] : vars) {
     if (!v.secret) continue;
     std::string enc;

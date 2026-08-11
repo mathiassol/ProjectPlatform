@@ -1,13 +1,13 @@
 #include "core/automations.hpp"
 
 #include "core/install.hpp"
+#include "platform/platform.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 
 #include <cstdlib>
 #include <fstream>
 #include <regex>
-#include <windows.h>
 
 namespace pp {
 namespace fs = std::filesystem;
@@ -154,13 +154,16 @@ void printAutomationHelp(const AutomationInfo& info) {
   out::dim("  pp auto status " + info.id + "    Workspace + task status");
   out::dim("  pp auto upload " + info.id + "     Upload completed task branch");
   out::dim("  pp auto goto " + info.id + "       Print workspace path (for cd)");
-  out::dim("  pp auto explore " + info.id + "    Open workspace in Explorer");
+  out::dim("  pp auto explore " + info.id + "    Open workspace in file manager");
   out::dim("  pp auto logs " + info.id + "       Recent run logs");
   out::dim("  pp auto open " + info.id + "       Open workspace in Cursor");
   out::dim("  pp auto doctor " + info.id + "     Check prerequisites");
   out::blank();
   out::dim("workspace: " + info.workspace_root.string());
   out::dim("setup: " + std::string(info.setup_complete ? "complete" : "not run"));
+#if !defined(_WIN32)
+  out::dim("macOS note: requires pwsh (brew install --cask powershell)");
+#endif
 }
 
 bool runAutomationEngine(const std::string& id, const std::string& mode,
@@ -186,32 +189,44 @@ bool runAutomationEngine(const std::string& id, const std::string& mode,
     return false;
   }
 
+#if !defined(_WIN32)
+  {
+    const int pwshOk = std::system("command -v pwsh >/dev/null 2>&1");
+    if (pwshOk != 0) {
+      out::error("pwsh not found — required for pp auto on macOS");
+      out::dim("  brew install --cask powershell");
+      return false;
+    }
+  }
+#endif
+
   if (autoInfo) ensureDir(autoInfo->workspace_root);
 
-  if (force) SetEnvironmentVariableA("PP_FORCE", "1");
-  else SetEnvironmentVariableA("PP_FORCE", nullptr);
-  if (dry_run) SetEnvironmentVariableA("PP_DRY_RUN", "1");
-  else SetEnvironmentVariableA("PP_DRY_RUN", nullptr);
-  if (quiet) SetEnvironmentVariableA("PP_QUIET", "1");
-  else SetEnvironmentVariableA("PP_QUIET", nullptr);
-  if (auto_no_agent) SetEnvironmentVariableA("PP_AUTO_AGENT", "0");
-  else SetEnvironmentVariableA("PP_AUTO_AGENT", nullptr);
-  if (auto_prompt_setup) SetEnvironmentVariableA("PP_AUTO_PROMPT_KIND", "setup");
-  else SetEnvironmentVariableA("PP_AUTO_PROMPT_KIND", nullptr);
+  platform::setEnv("PP_APP_DATA", appDataDir().string().c_str());
+  if (force) platform::setEnv("PP_FORCE", "1");
+  else platform::unsetEnv("PP_FORCE");
+  if (dry_run) platform::setEnv("PP_DRY_RUN", "1");
+  else platform::unsetEnv("PP_DRY_RUN");
+  if (quiet) platform::setEnv("PP_QUIET", "1");
+  else platform::unsetEnv("PP_QUIET");
+  if (auto_no_agent) platform::setEnv("PP_AUTO_AGENT", "0");
+  else platform::unsetEnv("PP_AUTO_AGENT");
+  if (auto_prompt_setup) platform::setEnv("PP_AUTO_PROMPT_KIND", "setup");
+  else platform::unsetEnv("PP_AUTO_PROMPT_KIND");
   if (task_count > 0) {
-    SetEnvironmentVariableA("PP_AUTO_TASK_COUNT", std::to_string(task_count).c_str());
+    platform::setEnv("PP_AUTO_TASK_COUNT", std::to_string(task_count).c_str());
   } else {
-    SetEnvironmentVariableA("PP_AUTO_TASK_COUNT", nullptr);
+    platform::unsetEnv("PP_AUTO_TASK_COUNT");
   }
 
   if (autoInfo) {
-    SetEnvironmentVariableA("PP_AUTO_ID", id.c_str());
-    SetEnvironmentVariableA("PP_AUTO_BUNDLE", autoInfo->bundle_root.string().c_str());
-    SetEnvironmentVariableA("PP_AUTO_WORKSPACE", autoInfo->workspace_root.string().c_str());
+    platform::setEnv("PP_AUTO_ID", id.c_str());
+    platform::setEnv("PP_AUTO_BUNDLE", autoInfo->bundle_root.string().c_str());
+    platform::setEnv("PP_AUTO_WORKSPACE", autoInfo->workspace_root.string().c_str());
   } else {
-    SetEnvironmentVariableA("PP_AUTO_ID", nullptr);
-    SetEnvironmentVariableA("PP_AUTO_BUNDLE", nullptr);
-    SetEnvironmentVariableA("PP_AUTO_WORKSPACE", nullptr);
+    platform::unsetEnv("PP_AUTO_ID");
+    platform::unsetEnv("PP_AUTO_BUNDLE");
+    platform::unsetEnv("PP_AUTO_WORKSPACE");
   }
 
   std::string psArgs = "-NoProfile -ExecutionPolicy Bypass -File \"" + engine.string() + "\"";
@@ -220,7 +235,11 @@ bool runAutomationEngine(const std::string& id, const std::string& mode,
   for (const auto& a : args) psArgs += " \"" + a + "\"";
 
   out::dim(id.empty() ? std::string("automation: ") + mode : "automation " + id + ": " + mode);
+#if defined(_WIN32)
   const std::string full = "powershell.exe " + psArgs;
+#else
+  const std::string full = "pwsh " + psArgs;
+#endif
   const int code = std::system(full.c_str());
   if (code != 0) {
     out::error("automation failed (exit " + std::to_string(code) + ")");

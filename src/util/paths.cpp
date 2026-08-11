@@ -1,30 +1,45 @@
 #include "util/paths.hpp"
 
+#include "platform/platform.hpp"
+
 #include <cstdlib>
 #include <fstream>
 #include <regex>
+
+#if defined(_WIN32)
 #include <windows.h>
+#endif
 
 namespace pp {
 
-static fs::path envPath(const char* name) {
-  const char* v = std::getenv(name);
-  return v ? fs::path(v) : fs::path{};
-}
-
-fs::path knownFolderDocuments() {
-  const char* home = std::getenv("USERPROFILE");
-  if (home) return fs::path(home) / "Documents";
-  return fs::path("Documents");
-}
+fs::path knownFolderDocuments() { return platform::userDocumentsDir(); }
 
 fs::path expandEnv(const std::string& s) {
+#if defined(_WIN32)
   std::string out;
   out.resize(32768);
   DWORD n = ExpandEnvironmentStringsA(s.c_str(), out.data(), static_cast<DWORD>(out.size()));
   if (n == 0 || n > out.size()) return fs::path(s);
   out.resize(n > 0 ? n - 1 : 0);
   return fs::path(out);
+#else
+  // Minimal: expand $HOME / ${HOME} and leave the rest as-is (Phase 1 can deepen).
+  std::string out = s;
+  if (auto home = platform::getEnv("HOME")) {
+    const std::string h = *home;
+    size_t pos = 0;
+    while ((pos = out.find("${HOME}", pos)) != std::string::npos) {
+      out.replace(pos, 7, h);
+      pos += h.size();
+    }
+    pos = 0;
+    while ((pos = out.find("$HOME", pos)) != std::string::npos) {
+      out.replace(pos, 5, h);
+      pos += h.size();
+    }
+  }
+  return fs::path(out);
+#endif
 }
 
 fs::path resolvePath(const fs::path& p) {
@@ -32,7 +47,7 @@ fs::path resolvePath(const fs::path& p) {
   return fs::weakly_canonical(fs::absolute(p));
 }
 
-fs::path appDataDir() { return envPath("LOCALAPPDATA") / "ProjectPlatform"; }
+fs::path appDataDir() { return platform::appDataRoot(); }
 
 fs::path installDir() { return appDataDir() / "bin"; }
 
@@ -40,7 +55,13 @@ fs::path configPath() { return appDataDir() / "config.json"; }
 
 fs::path statePath() { return appDataDir() / "state.json"; }
 
-fs::path hookScriptPath() { return appDataDir() / "pp-hook.ps1"; }
+fs::path hookScriptPath() {
+#if defined(_WIN32)
+  return appDataDir() / "pp-hook.ps1";
+#else
+  return appDataDir() / "pp-hook.zsh";
+#endif
+}
 
 fs::path defaultProjectsDir() { return knownFolderDocuments() / "Projects"; }
 
@@ -78,6 +99,26 @@ static std::string jsonEscape(const std::string& s) {
   return out;
 }
 
+static std::string jsonUnescape(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '\\' && i + 1 < s.size()) {
+      switch (s[i + 1]) {
+        case '\\': out += '\\'; ++i; break;
+        case '"': out += '"'; ++i; break;
+        case 'n': out += '\n'; ++i; break;
+        case 'r': out += '\r'; ++i; break;
+        case 't': out += '\t'; ++i; break;
+        default: out += s[i]; break;
+      }
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
 static std::optional<std::string> jsonGetString(const std::string& json, const std::string& key) {
   const std::regex re("\"" + key + "\"\\s*:\\s*\"([^\"]*)\"");
   std::smatch m;
@@ -97,10 +138,12 @@ Config loadConfig() {
   if (!in) return cfg;
   std::string json((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
-  if (auto v = jsonGetString(json, "projects_dir")) cfg.projects_dir = expandEnv(*v);
-  if (auto v = jsonGetString(json, "templates_dir")) cfg.templates_dir = expandEnv(*v);
-  if (auto v = jsonGetString(json, "version")) cfg.version = *v;
-  if (auto v = jsonGetString(json, "editor")) cfg.editor = *v;
+  if (auto v = jsonGetString(json, "projects_dir"))
+    cfg.projects_dir = resolvePath(expandEnv(jsonUnescape(*v)));
+  if (auto v = jsonGetString(json, "templates_dir"))
+    cfg.templates_dir = resolvePath(expandEnv(jsonUnescape(*v)));
+  if (auto v = jsonGetString(json, "version")) cfg.version = jsonUnescape(*v);
+  if (auto v = jsonGetString(json, "editor")) cfg.editor = jsonUnescape(*v);
   return cfg;
 }
 

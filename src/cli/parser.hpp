@@ -24,7 +24,11 @@ struct Args {
   bool auto_no_agent = false;
   bool auto_prompt_setup = false;
   int task_count = 0;
+#if defined(_WIN32)
   std::string type = "ps1";
+#else
+  std::string type = "sh";
+#endif
   std::string profile;
   std::string from_path;
   std::string as_name;

@@ -25,6 +25,8 @@ struct PluginInfo {
   std::filesystem::path root;
   std::map<std::string, std::string> vars;
   std::vector<PluginCommand> commands;
+  // Empty = all platforms. Values: "win", "windows", "darwin", "macos", "mac".
+  std::vector<std::string> platforms;
 };
 
 std::filesystem::path globalPluginsDir();

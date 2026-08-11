@@ -3,9 +3,8 @@
 #include "cli/parser.hpp"
 #include "core/plugins.hpp"
 #include "core/projects.hpp"
+#include "platform/platform.hpp"
 #include "util/output.hpp"
-
-#include <windows.h>
 
 namespace pp {
 namespace fs = std::filesystem;
@@ -83,12 +82,12 @@ std::optional<int> tryDispatchPlugin(const Args& args) {
   const auto& sub = args.positional[1];
   std::vector<std::string> rest(args.positional.begin() + 2, args.positional.end());
 
-  if (args.force) SetEnvironmentVariableA("PP_FORCE", "1");
-  else SetEnvironmentVariableA("PP_FORCE", nullptr);
-  if (args.all) SetEnvironmentVariableA("PP_ALL", "1");
-  else SetEnvironmentVariableA("PP_ALL", nullptr);
-  if (args.dry_run) SetEnvironmentVariableA("PP_DRY_RUN", "1");
-  else SetEnvironmentVariableA("PP_DRY_RUN", nullptr);
+  if (args.force) platform::setEnv("PP_FORCE", "1");
+  else platform::unsetEnv("PP_FORCE");
+  if (args.all) platform::setEnv("PP_ALL", "1");
+  else platform::unsetEnv("PP_ALL");
+  if (args.dry_run) platform::setEnv("PP_DRY_RUN", "1");
+  else platform::unsetEnv("PP_DRY_RUN");
 
   return runPluginCommand(*plugin, sub, rest, project) ? 0 : 1;
 }

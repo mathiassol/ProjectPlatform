@@ -10,19 +10,18 @@
 #include "core/projects.hpp"
 #include "core/scripts.hpp"
 #include "core/templates.hpp"
+#include "platform/platform.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 #include "util/editor.hpp"
 
 #include <fstream>
-#include <windows.h>
-#include <shellapi.h>
 
 namespace pp {
 namespace fs = std::filesystem;
 
 static void printHelp() {
-  out::title("ProjectPlatform (PP) - Windows project manager");
+  out::title("ProjectPlatform (PP) - project manager");
   out::blank();
   out::info("Projects");
   out::dim("  pp list|ls                 List projects");
@@ -47,7 +46,7 @@ static void printHelp() {
   out::dim("  pp script list [--global|-g|--project|-p]");
   out::dim("  pp script run <name> [--global|-g] [args...]");
   out::dim("  pp script edit <name> [--global|-g]     Open script in editor");
-  out::dim("  pp script new <name> [--global|-g] [--type ps1|bat]");
+  out::dim("  pp script new <name> [--global|-g] [--type ps1|bat|sh]");
   out::dim("  pp script delete <name> [--global|-g] [--force]");
   out::blank();
   out::info("Environment & secrets");
@@ -78,10 +77,7 @@ static void printHelp() {
   out::dim("  pp code [name]             Open project in VS Code");
 }
 
-static bool openExplorer(const fs::path& p) {
-  HINSTANCE r = ShellExecuteA(nullptr, "open", p.string().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-  return reinterpret_cast<intptr_t>(r) > 32;
-}
+static bool openExplorer(const fs::path& p) { return platform::openPath(p); }
 
 static bool openVsCode(const fs::path& p) {
   const std::string cmd = "code \"" + p.string() + "\"";
@@ -124,7 +120,9 @@ static int cmdCd(const Args& args) {
     return 1;
   }
   setCurrentProject(proj->name);
-  std::cout << proj->path.string() << "\n";
+  std::error_code ec;
+  const auto outPath = fs::weakly_canonical(proj->path, ec);
+  std::cout << (ec ? proj->path.string() : outPath.string()) << "\n";
   if (!args.quiet) {
     out::blank();
     out::warn("pp.exe cannot change your shell directory by itself");
@@ -306,7 +304,7 @@ static int cmdScript(const Args& args) {
   }
   if (sub == "new" || sub == "create") {
     if (args.positional.size() < 3) {
-      out::error("usage: pp script new <name> [--type ps1|bat]");
+      out::error("usage: pp script new <name> [--type ps1|bat|sh]");
       return 1;
     }
     std::string ext = args.type;
@@ -335,12 +333,17 @@ static int cmdHook(const Args& args) {
     refreshHookScript();
     out::success("hook script updated");
     out::dim("Reload this session:");
+#if defined(_WIN32)
     out::dim("  . $PROFILE");
+#else
+    out::dim("  source ~/.zshrc");
+#endif
     return 0;
   }
   if (sub == "uninstall" || sub == "remove") return uninstallHook() ? 0 : 1;
   if (sub == "status") {
     const auto marker = "# ProjectPlatform hook";
+#if defined(_WIN32)
     bool pwsh7 = false, winps = false;
     for (const bool pwsh : {true, false}) {
       const char* home = std::getenv("USERPROFILE");
@@ -366,11 +369,45 @@ static int cmdHook(const Args& args) {
       out::info("With hook on:");
       out::dim("  pp cd/goto/enter <name>  actually changes directory");
       out::dim("  $env:PP_PROJECT          set for scripts and pp script");
-      out::dim("  prompt                   shows current project when inside one");
+      out::dim("  prompt                   PP:project> or PP:project/subfolder> when nested");
     } else {
       out::warn("hook not installed");
       out::dim("  pp cd only prints a path — run 'pp hook install' to jump in-terminal");
     }
+#else
+    bool zsh = false, fish = false;
+    const auto home = platform::userHomeDir();
+    if (!home.empty()) {
+      const fs::path profile = home / ".zshrc";
+      if (fs::exists(profile)) {
+        std::ifstream in(profile);
+        const std::string content((std::istreambuf_iterator<char>(in)),
+                                  std::istreambuf_iterator<char>());
+        zsh = content.find(marker) != std::string::npos;
+      }
+      const fs::path fishProfile = home / ".config" / "fish" / "config.fish";
+      if (fs::exists(fishProfile)) {
+        std::ifstream in(fishProfile);
+        const std::string content((std::istreambuf_iterator<char>(in)),
+                                  std::istreambuf_iterator<char>());
+        fish = content.find(marker) != std::string::npos;
+      }
+    }
+    if (zsh || fish) {
+      out::success("hook active");
+      if (zsh) out::dim("  ~/.zshrc");
+      if (fish) out::dim("  ~/.config/fish/config.fish");
+      out::blank();
+      out::info("With hook on:");
+      out::dim("  pp cd/goto/enter <name>  actually changes directory");
+      out::dim("  $PP_PROJECT              set for scripts and pp script");
+      out::dim("  prompt                   PP:project> or PP:project/subfolder> when nested");
+      out::dim("  pp restart               new Terminal/iTerm + session restore (zsh)");
+    } else {
+      out::warn("hook not installed");
+      out::dim("  pp cd only prints a path — run 'pp hook install' to jump in-terminal");
+    }
+#endif
     return 0;
   }
   out::error("unknown hook subcommand");

@@ -3,21 +3,23 @@
 
 Ensure-AiDataEnvProfile
 
+$pp = Get-PpCli
 $sub = if ($args.Count -gt 0) { [string]$args[0] } else { 'edit' }
 
 switch ($sub) {
     'edit' {
-        & pp.exe env edit ai-data --global
+        & $pp env edit ai-data --global
         exit $LASTEXITCODE
     }
     'use' {
-        & pp.exe env use ai-data --global
+        & $pp env use ai-data --global
         exit $LASTEXITCODE
     }
     'show' {
-        & pp.exe env profiles --global
+        & $pp env profiles --global
         Write-Host ''
-        Write-Host 'Profile file: %LOCALAPPDATA%\ProjectPlatform\env\profiles\ai-data.env' -ForegroundColor DarkGray
+        $profilePath = Join-Path (Get-PpAppDataRoot) 'env/profiles/ai-data.env'
+        Write-Host "Profile file: $profilePath" -ForegroundColor DarkGray
         exit 0
     }
     default {

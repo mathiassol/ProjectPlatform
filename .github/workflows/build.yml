@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Smoke
+        shell: pwsh
+        run: |
+          $pp = ".\build\Release\pp.exe"
+          & $pp version
+          & $pp help
+          & $pp list
+          & $pp config
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Smoke
+        run: |
+          ./build/pp version
+          ./build/pp help
+          ./build/pp list
+          ./build/pp config
+          ./build/pp install
+          ./build/pp env profiles --global || true
+          ./build/pp env set PP_SMOKE_SECRET smokevalue --global --secret
+          ./build/pp env get PP_SMOKE_SECRET --global
+          ./build/pp env unset PP_SMOKE_SECRET --global
+          ./build/pp hook install
+          ./build/pp hook status
+          ./build/pp hook uninstall
+          ./build/pp update --check || true
+          ./build/pp plugin list || true
+          ./build/pp auto list || true
+          ./build/pp uninstall

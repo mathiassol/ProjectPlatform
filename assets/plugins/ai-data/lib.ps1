@@ -1,6 +1,24 @@
 # AI-Data plugin shared helpers
 . "$PSScriptRoot\env-lib.ps1"
 
+function Get-PpAppDataRoot {
+    if ($env:PP_APP_DATA -and (Test-Path -LiteralPath $env:PP_APP_DATA)) {
+        return $env:PP_APP_DATA
+    }
+    if ($env:LOCALAPPDATA) {
+        return (Join-Path $env:LOCALAPPDATA 'ProjectPlatform')
+    }
+    $home = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $null }
+    if (-not $home) { throw 'Could not resolve ProjectPlatform app data root' }
+    return (Join-Path $home 'Library/Application Support/ProjectPlatform')
+}
+
+function Get-PpCli {
+    if (Get-Command pp -ErrorAction SilentlyContinue) { return 'pp' }
+    if (Get-Command pp.exe -ErrorAction SilentlyContinue) { return 'pp.exe' }
+    return 'pp'
+}
+
 function Get-AiDataRepoName {
     if ($env:PP_AI_REPO_NAME) { return $env:PP_AI_REPO_NAME }
     return 'ai-data-monorepo'
@@ -12,14 +30,16 @@ function Get-AiDataRepoUrl {
 }
 
 function Get-AiDataProjectsRoot {
-    $cfg = Join-Path $env:LOCALAPPDATA 'ProjectPlatform\config.json'
+    $cfg = Join-Path (Get-PpAppDataRoot) 'config.json'
     if (Test-Path $cfg) {
         try {
             $j = Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json
             if ($j.projects_dir) { return [string]$j.projects_dir }
         } catch { }
     }
-    return Join-Path $env:USERPROFILE 'Documents\Projects'
+    $home = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $null }
+    if ($home) { return (Join-Path $home 'Documents/Projects') }
+    return 'Documents/Projects'
 }
 
 . "$PSScriptRoot\repo-lib.ps1"

@@ -6,6 +6,25 @@ function Write-PpAutoMsg {
     Write-Host $Text -ForegroundColor $Color
 }
 
+function Test-PpIsWindows {
+    if ($null -ne (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue)) {
+        return [bool]$IsWindows
+    }
+    return ($env:OS -match 'Windows')
+}
+
+function Get-PpAppDataRoot {
+    if ($env:PP_APP_DATA -and (Test-Path -LiteralPath $env:PP_APP_DATA)) {
+        return $env:PP_APP_DATA
+    }
+    if ($env:LOCALAPPDATA) {
+        return (Join-Path $env:LOCALAPPDATA 'ProjectPlatform')
+    }
+    $home = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $null }
+    if (-not $home) { throw 'Could not resolve ProjectPlatform app data root' }
+    return (Join-Path $home 'Library/Application Support/ProjectPlatform')
+}
+
 function Confirm-PpAutoAction {
     param(
         [Parameter(Mandatory = $true)][string]$Message,
@@ -18,7 +37,7 @@ function Confirm-PpAutoAction {
 }
 
 function Get-PpAutoBundledDir {
-    Join-Path $env:LOCALAPPDATA 'ProjectPlatform\automations\bundled'
+    Join-Path (Get-PpAppDataRoot) 'automations/bundled'
 }
 
 function Get-PpAutoBundleRoot {

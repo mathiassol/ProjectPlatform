@@ -1,11 +1,10 @@
 #include "core/scripts.hpp"
 
 #include "core/projects.hpp"
+#include "platform/platform.hpp"
 #include "util/editor.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
-
-#include <windows.h>
 
 #include <cstdlib>
 #include <fstream>
@@ -18,7 +17,9 @@ static fs::path scriptsRoot(ScriptScope scope, const fs::path& project) {
   return projectScriptsDir(project);
 }
 
-static bool isScriptExt(const std::string& ext) { return ext == ".ps1" || ext == ".bat"; }
+static bool isScriptExt(const std::string& ext) {
+  return ext == ".ps1" || ext == ".bat" || ext == ".sh" || ext == ".cmd";
+}
 
 static std::string normalizeScriptName(std::string name) {
   const fs::path p(name);
@@ -75,23 +76,33 @@ bool runScript(const std::string& name, ScriptScope scope, const fs::path& proje
 
   std::string cmd;
   if (script->ext == ".ps1") {
+#if defined(_WIN32)
     cmd = "powershell -NoProfile -ExecutionPolicy Bypass -File \"" + script->path.string() + "\"";
+#else
+    cmd = "pwsh -NoProfile -File \"" + script->path.string() + "\"";
+#endif
+  } else if (script->ext == ".sh") {
+    cmd = "bash \"" + script->path.string() + "\"";
   } else {
+#if defined(_WIN32)
     cmd = "cmd /c \"" + script->path.string() + "\"";
+#else
+    cmd = "sh \"" + script->path.string() + "\"";
+#endif
   }
   for (const auto& a : args) cmd += " \"" + a + "\"";
 
+  fs::path runCwd;
   if (scope == ScriptScope::Project && !project.empty()) {
     out::info("running in " + project.filename().string());
-    SetCurrentDirectoryA(project.string().c_str());
+    runCwd = project;
   } else if (script->scope == ScriptScope::Global) {
     out::dim("global script");
   }
 
   out::dim("exec: " + cmd);
-  const int code = std::system(cmd.c_str());
-  if (code != 0) {
-    out::error("script exited with code " + std::to_string(code));
+  if (!platform::runCommand(cmd, runCwd)) {
+    out::error("script exited with non-zero status");
     return false;
   }
   out::success("script finished: " + name);
@@ -100,10 +111,17 @@ bool runScript(const std::string& name, ScriptScope scope, const fs::path& proje
 
 bool createScript(const std::string& name, const std::string& ext, ScriptScope scope,
                   const fs::path& project) {
+#if defined(_WIN32)
   if (ext != ".ps1" && ext != ".bat") {
     out::error("extension must be .ps1 or .bat");
     return false;
   }
+#else
+  if (ext != ".sh" && ext != ".ps1") {
+    out::error("extension must be .sh or .ps1");
+    return false;
+  }
+#endif
   const auto root = scriptsRoot(scope, project);
   ensureDir(root);
   const auto path = root / (name + ext);
@@ -117,6 +135,11 @@ bool createScript(const std::string& name, const std::string& ext, ScriptScope s
     file << "# PP script: " << name << "\n";
     file << "Write-Host \"Running " << name << "...\"\n";
     file << "# Add commands below\n";
+  } else if (ext == ".sh") {
+    file << "#!/usr/bin/env bash\n";
+    file << "# PP script: " << name << "\n";
+    file << "set -euo pipefail\n";
+    file << "echo \"Running " << name << "...\"\n";
   } else {
     file << "@echo off\n";
     file << "REM PP script: " << name << "\n";

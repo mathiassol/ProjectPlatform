@@ -302,7 +302,19 @@ function Invoke-PpAutoGoto {
 
 function Invoke-PpAutoExplore {
     param($Ctx)
-    explorer.exe $Ctx.Workspace
+    if (Get-Command open -ErrorAction SilentlyContinue) {
+        & open $Ctx.Workspace
+        return
+    }
+    if (Get-Command explorer.exe -ErrorAction SilentlyContinue) {
+        & explorer.exe $Ctx.Workspace
+        return
+    }
+    if (Test-PpIsWindows) {
+        Start-Process explorer.exe $Ctx.Workspace
+        return
+    }
+    Write-Host "Open folder manually: $($Ctx.Workspace)" -ForegroundColor Yellow
 }
 
 function Invoke-PpAutoReset {

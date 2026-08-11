@@ -3,6 +3,7 @@
 #include "core/automations.hpp"
 #include "core/envstore.hpp"
 
+#include "platform/platform.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
 #include "util/progress.hpp"
@@ -16,11 +17,7 @@
 namespace pp {
 namespace fs = std::filesystem;
 
-std::string getExePath() {
-  char buf[MAX_PATH];
-  const DWORD n = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-  return n ? std::string(buf, n) : std::string{};
-}
+std::string getExePath() { return platform::getExePath().string(); }
 
 static bool readUserPath(std::string& pathOut) {
   HKEY key = nullptr;
@@ -319,15 +316,32 @@ static bool writeHookScript() {
   out << "# PP_HOOK_VERSION=" << PP_APP_VERSION << "\n";
   out << R"PPHOOK(# Loaded via $PROFILE wrapper (re-sources this file each call).
 
+function Normalize-PpPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    $clean = $Path.Trim().Replace('\\', '\').TrimEnd('\')
+    try {
+        return ([System.IO.Path]::GetFullPath($clean)).TrimEnd('\')
+    } catch {
+        return $clean
+    }
+}
+
 function Sync-PpProject {
     $info = & pp.exe here --json 2>$null
     if ($LASTEXITCODE -eq 0 -and $info) {
-        $env:PP_PROJECT = $info.Trim()
+        $name = $info.Trim()
+        $env:PP_PROJECT = $name
+        $root = & pp.exe cd $name --quiet 2>$null
+        if ($LASTEXITCODE -eq 0 -and $root) {
+            $env:PP_PROJECT_ROOT = Normalize-PpPath $root
+        }
         $env:PP_PROJECT_PATH = (Get-Location).Path
-        return $info.Trim()
+        return $name
     }
     if (-not $env:PP_PROJECT) {
         $env:PP_PROJECT_PATH = $null
+        $env:PP_PROJECT_ROOT = $null
     }
     return $null
 }
@@ -380,6 +394,7 @@ function Invoke-PpCd {
     Set-Location $path
     $env:PP_PROJECT = $Name
     $env:PP_PROJECT_PATH = $path
+    $env:PP_PROJECT_ROOT = Normalize-PpPath $path
     if (-not $Quiet) { Write-Host "-> $path" -ForegroundColor Cyan }
     Invoke-PpEnvApply
     return $true
@@ -494,10 +509,31 @@ function ppgo {
     Invoke-PpCd -Name $Name
 }
 
+function Get-PpPromptLabel {
+    param([string]$Project)
+
+    $root = Normalize-PpPath $env:PP_PROJECT_ROOT
+    if (-not $root) {
+        $root = (& pp.exe cd $Project --quiet 2>$null)
+        if ($LASTEXITCODE -ne 0 -or -not $root) { return $Project }
+        $root = Normalize-PpPath $root
+        $env:PP_PROJECT_ROOT = $root
+    }
+
+    $cwd = Normalize-PpPath (Get-Location).Path
+    if ($cwd.Length -le $root.Length) { return $Project }
+    if (-not $cwd.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return $Project }
+
+    $rel = $cwd.Substring($root.Length).TrimStart('\')
+    if (-not $rel) { return $Project }
+    return ($Project + '/' + ($rel -replace '\\', '/'))
+}
+
 function pp-hook-prompt {
     $project = Sync-PpProject
     if ($project) {
-        "PP:$project> "
+        $label = Get-PpPromptLabel -Project $project
+        "PP:$label> "
     } else {
         "PS $(Get-Location)> "
     }
@@ -653,6 +689,8 @@ bool ensureHookScriptFresh() {
     if (content.find("Invoke-PpScript") != std::string::npos ||
         content.find("pp-hook-dispatch") == std::string::npos ||
         content.find("pp-hook-restore") == std::string::npos ||
+        content.find("Get-PpPromptLabel") == std::string::npos ||
+        content.find("Normalize-PpPath") == std::string::npos ||
         content.find(verLine) == std::string::npos) {
       hookUpdated = writeHookScript();
     }

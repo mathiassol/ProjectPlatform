@@ -1,0 +1,137 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.3.3). Leave empty to build artifacts only."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Package
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path src/util/version.hpp -Pattern 'PP_APP_VERSION "([^"]+)"').Matches.Groups[1].Value
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/Release/pp.exe dist/pp.exe -Force
+          Copy-Item Install.bat dist/Install.bat -Force
+          if (Test-Path assets) {
+            Copy-Item assets dist/assets -Recurse -Force
+          }
+          $zip = "ProjectPlatform-v$ver-win64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path dist/* -DestinationPath $zip -Force
+          echo "ASSET=$zip" >> $env:GITHUB_ENV
+          echo "VERSION=$ver" >> $env:GITHUB_ENV
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: win64
+          path: ProjectPlatform-v*-win64.zip
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure (universal)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Verify universal
+        run: |
+          file build/pp
+          lipo -info build/pp
+      - name: Package
+        run: |
+          VER=$(sed -n 's/.*PP_APP_VERSION "\([^"]*\)".*/\1/p' src/util/version.hpp | head -1)
+          mkdir -p dist
+          cp build/pp dist/pp
+          chmod +x dist/pp
+          cp install.sh dist/install.sh
+          chmod +x dist/install.sh
+          if [ -d assets ]; then cp -R assets dist/assets; fi
+          ZIP="ProjectPlatform-v${VER}-macos-universal.zip"
+          rm -f "$ZIP"
+          (cd dist && zip -qr "../$ZIP" .)
+          # Keep arm64 alias name for older docs / update clients
+          cp "$ZIP" "ProjectPlatform-v${VER}-macos-arm64.zip"
+          echo "ASSET=$ZIP" >> "$GITHUB_ENV"
+          echo "VERSION=$VER" >> "$GITHUB_ENV"
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: |
+            ProjectPlatform-v*-macos-universal.zip
+            ProjectPlatform-v*-macos-arm64.zip
+
+  publish:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Resolve tag
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.tag }}" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+          ls -R artifacts
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          WIN=$(find artifacts -name 'ProjectPlatform-*-win64.zip' | head -1)
+          MAC=$(find artifacts -name 'ProjectPlatform-*-macos-universal.zip' | head -1)
+          MAC_ARM=$(find artifacts -name 'ProjectPlatform-*-macos-arm64.zip' | head -1)
+          cat > /tmp/notes.md <<'EOF'
+          ## Install
+
+          ### Windows
+          1. Download **ProjectPlatform-*-win64.zip**
+          2. Extract and run **Install.bat**
+          3. Open a new terminal: `pp version`
+
+          ### macOS (universal arm64 + x86_64)
+          1. Download **ProjectPlatform-*-macos-universal.zip**
+          2. Extract and run: `chmod +x install.sh && ./install.sh`
+          3. `source ~/.zprofile` then `pp version`
+          4. Optional: `pp hook install && source ~/.zshrc`
+          5. Optional editor: `pp editor setup` (Zed)
+
+          ### Upgrade
+          ```
+          pp update
+          ```
+          EOF
+          sed -i 's/^          //' /tmp/notes.md
+          ASSETS=("$WIN" "$MAC")
+          if [[ -n "$MAC_ARM" && "$MAC_ARM" != "$MAC" ]]; then ASSETS+=("$MAC_ARM"); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --title "ProjectPlatform $TAG" --notes-file /tmp/notes.md
+          fi

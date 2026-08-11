@@ -1,8 +1,27 @@
 # PP ai-data plugin — env via global PP profile (not .envrc in repo)
 $AiDataEnvProfile = 'ai-data'
 
+function Get-PpCli {
+    if (Get-Command pp -ErrorAction SilentlyContinue) { return 'pp' }
+    if (Get-Command pp.exe -ErrorAction SilentlyContinue) { return 'pp.exe' }
+    return 'pp'
+}
+
+function Get-PpAppDataRoot {
+    if ($env:PP_APP_DATA -and (Test-Path -LiteralPath $env:PP_APP_DATA)) {
+        return $env:PP_APP_DATA
+    }
+    if ($env:LOCALAPPDATA) {
+        return (Join-Path $env:LOCALAPPDATA 'ProjectPlatform')
+    }
+    $home = if ($env:HOME) { $env:HOME } elseif ($env:USERPROFILE) { $env:USERPROFILE } else { $null }
+    if (-not $home) { throw 'Could not resolve ProjectPlatform app data root' }
+    return (Join-Path $home 'Library/Application Support/ProjectPlatform')
+}
+
 function Import-AiDataPpEnv {
-    $raw = (& pp.exe env apply --global --profile $AiDataEnvProfile --shell 2>$null | Out-String).Trim()
+    $pp = Get-PpCli
+    $raw = (& $pp env apply --global --profile $AiDataEnvProfile --shell 2>$null | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $raw -or $raw[0] -ne '{') {
         Write-Host "[ai] Profile '$AiDataEnvProfile' missing or empty" -ForegroundColor Yellow
         Write-Host '  pp env new ai-data --global --template ai-data' -ForegroundColor DarkGray
@@ -32,13 +51,14 @@ function Import-AiDataPpEnv {
 }
 
 function Ensure-AiDataEnvProfile {
-    $profiles = & pp.exe env profiles --global 2>$null
+    $pp = Get-PpCli
+    $profiles = & $pp env profiles --global 2>$null
     if ($profiles -match [regex]::Escape($AiDataEnvProfile)) { return }
 
     Write-Host "[ai] Creating global env profile: $AiDataEnvProfile" -ForegroundColor Cyan
-    & pp.exe env new $AiDataEnvProfile --global --template ai-data 2>&1 | Out-Null
+    & $pp env new $AiDataEnvProfile --global --template ai-data 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        & pp.exe env new $AiDataEnvProfile --global 2>&1 | Out-Null
+        & $pp env new $AiDataEnvProfile --global 2>&1 | Out-Null
     }
 }
 
@@ -47,7 +67,8 @@ function Migrate-AiDataEnvrcToProfile {
     $envrc = Join-Path $Repo '.envrc'
     if (-not (Test-Path -LiteralPath $envrc)) { return }
 
-    $profilePath = Join-Path $env:LOCALAPPDATA 'ProjectPlatform\env\profiles\ai-data.env'
+    $pp = Get-PpCli
+    $profilePath = Join-Path (Get-PpAppDataRoot) 'env/profiles/ai-data.env'
     $envrcText = Get-Content -LiteralPath $envrc -Raw -ErrorAction SilentlyContinue
     $profileHasCreds = $false
     if (Test-Path -LiteralPath $profilePath) {
@@ -58,13 +79,13 @@ function Migrate-AiDataEnvrcToProfile {
 
     if (-not $profileHasCreds -and $envrcHasCreds) {
         Write-Host '[ai] Moving .envrc -> PP global profile (repo stays clean)' -ForegroundColor Cyan
-        & pp.exe env import $envrc --as $AiDataEnvProfile --global 2>&1 | Out-Null
+        & $pp env import $envrc --as $AiDataEnvProfile --global 2>&1 | Out-Null
     } else {
         Write-Host '[ai] Removing repo .envrc (credentials live in PP env profile)' -ForegroundColor Cyan
     }
 
     Remove-Item -LiteralPath $envrc -Force -ErrorAction SilentlyContinue
-    & pp.exe env use $AiDataEnvProfile --global 2>&1 | Out-Null
+    & $pp env use $AiDataEnvProfile --global 2>&1 | Out-Null
 }
 
 function Install-AiDataRepoPatches {
@@ -77,7 +98,7 @@ function Install-AiDataRepoPatches {
         return
     }
 
-    $dest = Join-Path $Repo 'scripts\run-gradle.mjs'
+    $dest = Join-Path (Join-Path $Repo 'scripts') 'run-gradle.mjs'
     $destDir = Split-Path $dest -Parent
     if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
     Copy-Item -LiteralPath $runGradlePatch -Destination $dest -Force

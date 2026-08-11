@@ -1,0 +1,6 @@
+# Normalize shell scripts / hooks for Unix
+*.sh text eol=lf
+*.fish text eol=lf
+assets/pp-hook.zsh text eol=lf
+assets/pp-hook.fish text eol=lf
+install.sh text eol=lf

@@ -1,9 +1,8 @@
 #include "core/projects.hpp"
 
+#include "platform/platform.hpp"
 #include "util/output.hpp"
 #include "util/paths.hpp"
-
-#include <windows.h>
 
 #include <algorithm>
 #include <fstream>
@@ -129,9 +128,9 @@ std::optional<ProjectInfo> projectAtPath(const fs::path& p) {
 }
 
 std::optional<ProjectInfo> detectProjectFromCwd() {
-  char buf[MAX_PATH];
-  if (!GetCurrentDirectoryA(MAX_PATH, buf)) return std::nullopt;
-  return projectAtPath(fs::path(buf));
+  const auto cwd = platform::getCwd();
+  if (cwd.empty()) return std::nullopt;
+  return projectAtPath(cwd);
 }
 
 bool createProject(const std::string& name) {

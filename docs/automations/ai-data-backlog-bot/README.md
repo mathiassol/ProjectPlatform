@@ -8,10 +8,11 @@ Notion backlog → isolated git clones → Cursor agent implements safe codebase
 - Cursor Agent CLI (`agent`) on PATH — [Cursor CLI docs](https://cursor.com/docs/cli)
 - `git`, GitHub access to `Enterprise-Plus/ai-data-monorepo`
 - Optional: `pp env edit ai-data --global` for repo credentials
+- **macOS:** PowerShell 7 (`pwsh`) — `brew install --cask powershell`
 
 ## Quick start
 
-```powershell
+```
 pp install
 pp auto doctor
 pp auto setup ai-data-backlog-bot

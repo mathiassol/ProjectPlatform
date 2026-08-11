@@ -58,7 +58,7 @@ pp auto upload <id>             # interactive branch push (type confirm)
 
 pp auto goto <id>               # print workspace path
 
-pp auto explore <id>            # open in Explorer
+pp auto explore <id>            # open in file manager
 
 pp auto logs [id]
 
@@ -67,6 +67,18 @@ pp auto open <id>
 pp auto reset <id> [--force]    # clear state.json only
 
 ```
+
+## macOS
+
+Automations use the same PowerShell engine via **`pwsh`**:
+
+```bash
+brew install --cask powershell
+pp install
+pp auto doctor
+```
+
+Workspaces: `~/Documents/Automations/<id>/`.
 
 
 

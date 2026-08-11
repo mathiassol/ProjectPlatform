@@ -1,10 +1,10 @@
 # PP ai-data plugin — repo resolution (any folder / any clone location)
 
 function Test-AiDataRepoRoot([string]$Path) {
-    foreach ($m in @('gradlew.bat', 'package.json', 'backends\plus-agent')) {
-        if (-not (Test-Path (Join-Path $Path $m))) { return $false }
-    }
-    return $true
+    $hasGradle = (Test-Path (Join-Path $Path 'gradlew')) -or (Test-Path (Join-Path $Path 'gradlew.bat'))
+    $hasPkg = Test-Path (Join-Path $Path 'package.json')
+    $hasBackend = Test-Path (Join-Path (Join-Path $Path 'backends') 'plus-agent')
+    return ($hasGradle -and $hasPkg -and $hasBackend)
 }
 
 function Get-AiDataDefaultRepoPath {
@@ -12,7 +12,7 @@ function Get-AiDataDefaultRepoPath {
 }
 
 function Get-AiDataPluginStatePath {
-    Join-Path $env:LOCALAPPDATA 'ProjectPlatform\plugins\ai-data\state.json'
+    Join-Path (Get-PpAppDataRoot) 'plugins/ai-data/state.json'
 }
 
 function Get-AiDataPluginState {
@@ -41,7 +41,7 @@ function Set-AiDataSavedRepoPath {
 
     $resolved = (Resolve-Path -LiteralPath $Path).Path
     if (-not (Test-AiDataRepoRoot $resolved)) {
-        throw "Not an ai-data-monorepo root (need gradlew.bat, package.json, backends\plus-agent): $resolved"
+        throw "Not an ai-data-monorepo root (need gradlew/gradlew.bat, package.json, backends/plus-agent): $resolved"
     }
 
     $dir = Split-Path (Get-AiDataPluginStatePath) -Parent

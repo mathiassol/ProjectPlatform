@@ -1,15 +1,31 @@
 # PP automation - Cursor CLI integration + safety
 
 function Find-PpCursorAgentCli {
-    $paths = @(
-        (Get-Command agent -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source),
-        (Join-Path $env:LOCALAPPDATA 'cursor-agent\agent.cmd'),
-        (Join-Path $env:LOCALAPPDATA 'cursor-agent\cursor-agent.cmd'),
-        (Join-Path $env:LOCALAPPDATA 'Programs\cursor\resources\app\bin\agent.exe'),
-        (Join-Path $env:USERPROFILE '.cursor\bin\agent.exe')
-    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $candidates = @(
+        (Get-Command agent -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    )
 
-    $paths = @($paths)
+    if ($env:LOCALAPPDATA) {
+        $candidates += @(
+            (Join-Path $env:LOCALAPPDATA 'cursor-agent/agent.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'cursor-agent/cursor-agent.cmd'),
+            (Join-Path $env:LOCALAPPDATA 'Programs/cursor/resources/app/bin/agent.exe')
+        )
+    }
+    if ($env:USERPROFILE) {
+        $candidates += (Join-Path $env:USERPROFILE '.cursor/bin/agent.exe')
+    }
+    if ($env:HOME) {
+        $candidates += @(
+            (Join-Path $env:HOME '.local/bin/agent'),
+            (Join-Path $env:HOME '.cursor/bin/agent'),
+            '/usr/local/bin/agent',
+            '/opt/homebrew/bin/agent',
+            '/Applications/Cursor.app/Contents/Resources/app/bin/agent'
+        )
+    }
+
+    $paths = @($candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
     if ($paths.Count -eq 0) { return $null }
     foreach ($p in $paths) {
         if ($p -match '\.(cmd|exe)$') { return $p }
@@ -20,14 +36,43 @@ function Find-PpCursorAgentCli {
 function Find-PpCursorEditor {
     $cmd = Get-Command cursor -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $p = Join-Path $env:LOCALAPPDATA 'Programs\cursor\resources\app\bin\cursor.cmd'
-    if (Test-Path -LiteralPath $p) { return $p }
+    if ($env:LOCALAPPDATA) {
+        $p = Join-Path $env:LOCALAPPDATA 'Programs/cursor/resources/app/bin/cursor.cmd'
+        if (Test-Path -LiteralPath $p) { return $p }
+    }
+    if ($env:HOME) {
+        foreach ($cand in @(
+            (Join-Path $env:HOME '.local/bin/cursor'),
+            '/usr/local/bin/cursor',
+            '/opt/homebrew/bin/cursor',
+            '/Applications/Cursor.app/Contents/Resources/app/bin/cursor'
+        )) {
+            if (Test-Path -LiteralPath $cand) { return $cand }
+        }
+    }
     return $null
+}
+
+function Get-PpPowerShellHost {
+    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+        return (Get-Command pwsh).Source
+    }
+    if (Get-Command powershell -ErrorAction SilentlyContinue) {
+        return (Get-Command powershell).Source
+    }
+    if (Test-PpIsWindows) { return 'powershell.exe' }
+    return 'pwsh'
 }
 
 function Test-PpAutoPrerequisites {
     $blocking = [System.Collections.Generic.List[string]]::new()
     $optional = [System.Collections.Generic.List[string]]::new()
+
+    if (-not (Test-PpIsWindows)) {
+        if (-not (Get-Command pwsh -ErrorAction SilentlyContinue)) {
+            $blocking.Add('pwsh not on PATH (brew install --cask powershell)')
+        }
+    }
 
     $agent = Find-PpCursorAgentCli
     if (-not $agent) {
@@ -60,11 +105,12 @@ function Invoke-PpCursorAgentRun {
     $promptText = Get-Content -LiteralPath $PromptPath -Raw -Encoding UTF8
 
     if ($AgentPath -match '\.ps1$') {
+        $shell = Get-PpPowerShellHost
         $argList = @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $AgentPath,
             '-p', '-f', '--output-format', 'text', $promptText
         )
-        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList $argList `
+        $proc = Start-Process -FilePath $shell -ArgumentList $argList `
             -NoNewWindow -Wait -PassThru `
             -RedirectStandardOutput $LogOut -RedirectStandardError $LogErr
         return $proc.ExitCode

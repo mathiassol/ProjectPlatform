@@ -1,14 +1,16 @@
 {
   "id": "ai-data-backlog-bot",
   "name": "AI-DATA backlog BOT",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Notion backlog -> isolated repos -> Cursor agent tasks (Enterprise-Plus ai-data-monorepo)",
   "setup_prompt_file": "setup.prompt.md",
   "task_prompt_file": "task.prompt.md",
+  "platforms": ["win", "darwin"],
   "requires": {
     "cursor_cli": true,
     "git": true,
-    "notion_mcp": true
+    "notion_mcp": true,
+    "pwsh": "darwin"
   },
   "defaults": {
     "task_count": 3,
