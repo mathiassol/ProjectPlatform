@@ -57,8 +57,10 @@ PATH_OUT="$(pp cd "$DEMO" --quiet)"
 log "env + Keychain secret"
 pp env new ci-smoke --global || true
 pp env set PP_CI_SECRET "secret-value-$$" --global --secret
-GOT="$(pp env get PP_CI_SECRET --global)"
-echo "$GOT" | grep -q "secret-value-$$" || fail "secret round-trip failed (got: $GOT)"
+GOT="$(pp env get PP_CI_SECRET --global --show-secrets)"
+# Strip ANSI color codes if present
+GOT_CLEAN="$(printf '%s' "$GOT" | sed $'s/\x1b\\[[0-9;]*m//g')"
+echo "$GOT_CLEAN" | grep -q "PP_CI_SECRET=secret-value-$$" || fail "secret round-trip failed (got: $GOT_CLEAN)"
 pp env unset PP_CI_SECRET --global
 
 log "scripts (.sh default)"
