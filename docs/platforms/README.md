@@ -66,7 +66,7 @@ pp restart                      # new Terminal/iTerm + restore cwd/project/env (
 
 ## Roadmap
 
-0–4 complete. **Phase 5 (current)** is polish/parity. Further work is bugfix from real Mac testing.
+Phases **0–5** are implemented on `mac-demo` (CI-proven beta). **What to do next:** [WHERE-TO-GO.md](WHERE-TO-GO.md).
 
 ## Windows performance rules
 

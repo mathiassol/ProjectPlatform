@@ -2,7 +2,7 @@
 
 Cross-platform project manager CLI for `Documents/Projects` (Windows primary; macOS supported through Phase 3).
 
-See [docs/platforms/README.md](docs/platforms/README.md) for the Mac roadmap.
+See [docs/platforms/README.md](docs/platforms/README.md) for the Mac status matrix, and [docs/platforms/WHERE-TO-GO.md](docs/platforms/WHERE-TO-GO.md) for the next-step roadmap.
 
 ## Quick install
 
