@@ -4,3 +4,4 @@
 assets/pp-hook.zsh text eol=lf
 assets/pp-hook.fish text eol=lf
 install.sh text eol=lf
+scripts/ci/*.sh text eol=lf

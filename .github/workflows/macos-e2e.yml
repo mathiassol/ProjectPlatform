@@ -1,0 +1,63 @@
+name: macos-e2e
+
+# Full Darwin integration on a real macOS GitHub-hosted VM.
+on:
+  push:
+    branches: [mac-demo]
+  pull_request:
+    branches: [main, mac-demo]
+  workflow_dispatch:
+    inputs:
+      install_pwsh:
+        description: "Install PowerShell (pwsh) for plugin/auto smoke"
+        type: boolean
+        default: true
+
+concurrency:
+  group: macos-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: macOS full e2e
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PowerShell (optional)
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.install_pwsh }}
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            echo "pwsh already present: $(command -v pwsh)"
+            pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
+          else
+            brew install --cask powershell
+            pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
+          fi
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: File / arch check
+        run: |
+          file build/pp
+          ./build/pp version
+
+      - name: Full e2e
+        run: |
+          chmod +x scripts/ci/macos-e2e.sh
+          ./scripts/ci/macos-e2e.sh
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-e2e-diagnostics
+          path: |
+            ~/Library/Application Support/ProjectPlatform/**
+            ~/.zshrc
+          if-no-files-found: ignore
